@@ -41,6 +41,33 @@ export type PublishResult = {
   state: PublishState;
   message: string;
   publishedAt?: string;
+  failureReason?: string;
+};
+
+export type IntegrationCapability = {
+  id: string;
+  title: string;
+  owner: "前端" | "后端" | "前后端协作";
+  status: "已预留" | "需要后端" | "存在限制";
+  description: string;
+};
+
+export type ValidationIssue = {
+  platformId: PlatformId;
+  platformName: string;
+  field: string;
+  message: string;
+};
+
+export type PublishAttempt = {
+  id: string;
+  platformId: PlatformId;
+  platformName: string;
+  state: PublishState;
+  message: string;
+  retryCount: number;
+  createdAt: string;
+  failureReason?: string;
 };
 
 export type PlatformAdapter = {
