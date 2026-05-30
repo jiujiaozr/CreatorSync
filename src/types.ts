@@ -85,3 +85,38 @@ export type ContentGenerationProvider = {
   name: string;
   generateDrafts: (input: SourceContent, platformIds: PlatformId[]) => Promise<PlatformDraft[]>;
 };
+
+export type SavedContentRecord = {
+  id: string;
+  userId?: string;
+  source: SourceContent;
+  selectedPlatforms: PlatformId[];
+  drafts: PlatformDraft[];
+  publishAttempts: PublishAttempt[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ContentRecordInput = {
+  id?: string;
+  userId?: string;
+  source: SourceContent;
+  selectedPlatforms: PlatformId[];
+  drafts: PlatformDraft[];
+  publishAttempts: PublishAttempt[];
+};
+
+export type PersistenceMode = "supabase" | "local";
+
+export type PersistResult = {
+  record: SavedContentRecord;
+  mode: PersistenceMode;
+};
+
+export type UserProfile = {
+  id: string;
+  email: string;
+  nickname: string;
+  avatarUrl?: string;
+  updatedAt?: string;
+};

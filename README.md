@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-第一版重点做稳定演示，不接真实平台，也不接真实 AI API。
+第四次迭代重点做真实账号和数据保存。真实平台发布和真实 AI 仍不接入，但用户可以用 Supabase 邮箱密码登录、上传头像，并把内容方案保存到当前账号下。
 
 - 原始标题、正文、内容类型、目标受众、生成偏好输入
 - 公众号、知乎、B站、小红书平台选择
@@ -12,6 +12,10 @@
 - 每个平台生成结果可编辑
 - 不同平台预览样式不同
 - 一键模拟发布，展示发布中和成功状态
+- Supabase 邮箱密码登录、注册和退出登录
+- 登录后上传或替换头像
+- 登录后保存内容方案、平台草稿和模拟发布记录
+- 刷新页面后从当前账号的历史内容重新打开保存方案
 - 平台适配器结构，方便后续扩展抖音、视频号、微博
 
 ## 本地运行
@@ -20,6 +24,22 @@
 npm install
 npm run dev
 ```
+
+如果要启用第四次迭代的 Supabase 登录、头像上传和云端保存，需要在本地创建 `.env.local`：
+
+```bash
+VITE_SUPABASE_URL=你的 Supabase Project URL
+VITE_SUPABASE_ANON_KEY=你的 Supabase anon public key
+```
+
+如果没有配置这两个变量，项目会自动退回到浏览器本地保存。这样做的好处是：没有数据库时也能演示保存和打开历史内容；配置 Supabase 后，同一套界面会启用真实登录、头像上传和当前用户的数据隔离。
+
+GitHub Pages 上线时，还需要在 GitHub 仓库的 `Settings -> Secrets and variables -> Actions` 中添加同名 Secrets：
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
+GitHub Actions 构建时会读取这两个 Secrets，并把它们打进前端产物里。
 
 构建检查：
 
@@ -37,12 +57,14 @@ npm run build
 - `vite`、`@vitejs/plugin-react`：本地开发服务器和生产构建。
 - `typescript`：代码类型检查。
 - `lucide-react`：页面里的图标。
+- `@supabase/supabase-js`：第四次迭代用于连接 Supabase Auth、Storage 和数据库。
 
 原创功能部分：
 
 - 多平台内容适配规则、平台专属字段和字段校验逻辑。
 - Mock AI 生成流程。
 - 平台预览、编辑、模拟发布、发布失败重试和发布记录。
+- 第四次迭代的真实账号和数据保存流程：邮箱密码登录、头像上传、保存当前内容方案、读取当前账号历史内容、重新打开草稿、持久化模拟发布记录，并在 Supabase 未配置时提供本地保存兜底。
 - 真实能力预研区和迭代规划说明。
 
 ## 产品流程
@@ -220,13 +242,43 @@ https://jiujiaozr.github.io/CreatorSync/
 
 界面上，本次只做简约大气风格的细节打磨：减少背景装饰感，统一卡片、按钮、表单和状态标签的视觉层级，让桌面端和移动端的演示流程更清楚。
 
+## 第四次迭代实现说明
+
+本次第四次迭代按“Supabase 真实登录 + 头像上传 + 数据保存版”落地，重点解决“用户有账号、头像可上传、刷新后内容不丢、历史记录只归当前账号”的问题。
+
+已增加内容：
+
+- 个人中心新增邮箱密码登录、注册和退出登录。
+- 登录后可以保存昵称，并上传或替换头像。
+- 工作台新增“保存当前方案”：保存原始内容、目标平台、平台草稿和模拟发布记录。
+- 发布记录页新增当前账号的历史内容列表：可以从历史记录重新打开之前保存过的内容方案。
+- 模拟发布或重试后，如果当前方案已经保存过，会自动更新这条方案里的发布记录。
+- 新增 Supabase 登录、头像和保存服务：配置 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY` 后读写 Supabase。
+- 未配置 Supabase 时自动使用浏览器本地保存，方便继续演示完整流程。
+- 新增 `supabase/schema.sql`，包含 `profiles`、`content_records`、`platform_drafts`、`publish_records`，并创建 `avatars` 存储桶。
+
+Supabase 配置方式：
+
+1. 在 Supabase 项目中打开 SQL Editor。
+2. 复制 `supabase/schema.sql` 的内容并执行。
+3. 将项目的 URL 和 anon public key 填入 `.env.local`。
+4. 在 Authentication 中启用 Email 登录方式。
+5. 本地运行 `npm run dev`，或在 GitHub Actions Secrets 中配置同名环境变量后合并到 `main` 自动部署。
+
+本次仍然不做：
+
+- 不接入真实 AI。
+- 不接入真实平台发布 API。
+- 不做复杂团队协作审批。
+- 不做计费系统。
+
 ## 第四到第八次迭代路线
 
 后续迭代会继续保持“小步上线、每次只做一个主要能力”的节奏，避免一次性把范围做得太大。
 
-### 第四次迭代：Supabase 数据保存版
+### 第四次迭代：Supabase 登录与数据保存版
 
-目标是让内容和发布记录不再只存在当前页面里。前端继续使用 GitHub Pages，数据保存使用 Supabase 免费版。
+目标是让用户可以登录、有头像，并让内容和发布记录不再只存在当前页面里。前端继续使用 GitHub Pages，登录、头像和数据保存使用 Supabase 免费版。
 
 计划新增：
 
@@ -234,11 +286,12 @@ https://jiujiaozr.github.io/CreatorSync/
 - 保存各平台生成草稿。
 - 保存模拟发布记录。
 - 刷新页面后可以重新打开历史内容。
-- README 补充 Supabase 环境变量和数据表结构。
+- README 补充 Supabase 环境变量、登录、头像上传和数据表结构。
 
 建议数据表：
 
-- `content_records`：保存一次内容生成任务。
+- `profiles`：保存用户昵称和头像地址。
+- `content_records`：保存一次内容生成任务，并归属到当前用户。
 - `platform_drafts`：保存每个平台的草稿。
 - `publish_records`：保存发布状态、失败原因、重试次数和时间。
 
