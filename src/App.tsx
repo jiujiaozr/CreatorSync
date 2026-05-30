@@ -55,10 +55,12 @@ import {
 } from "./services/contentGeneration";
 import { simulatePublish } from "./services/publish";
 import { getContentRecord, getPersistenceMode, listContentRecords, saveContentRecord } from "./services/recordStorage";
+import { getWechatDraftConfigStatus, syncWechatDraft } from "./services/wechatDraft";
 import type {
   ContentType,
   IntegrationCapability,
   PersistenceMode,
+  PlatformAccountConnection,
   PlatformDraft,
   PlatformIntegrationProfile,
   PlatformId,
@@ -71,6 +73,7 @@ import type {
   TonePreference,
   UserProfile,
   ValidationIssue,
+  WechatDraftConfigStatus,
 } from "./types";
 
 const contentTypes: ContentType[] = ["知识分享", "产品介绍", "活动宣传", "经验复盘"];
@@ -135,12 +138,12 @@ const platformIntegrationProfiles: PlatformIntegrationProfile[] = [
   {
     platformId: "wechat",
     platformName: "微信公众号",
-    authStatus: "适合后续试点",
+    authStatus: "草稿同步试点",
     requiredPermissions: ["公众号主体", "AppID / AppSecret", "草稿箱接口", "素材上传"],
     apiDifficulty: "中",
     limitations: ["需要后端保管密钥", "图片素材要先上传", "正式群发仍受平台审核和频率限制"],
     publishEntryUrl: "https://mp.weixin.qq.com/",
-    nextStep: "第七次迭代优先尝试草稿箱同步，不直接做群发。",
+    nextStep: "第七次迭代接入草稿箱同步后端代理，不直接做群发。",
   },
   {
     platformId: "zhihu",
@@ -179,6 +182,51 @@ const emptyPublishResult = (platformId: PlatformId): PublishResult => ({
   state: "idle",
   message: "尚未发布",
 });
+
+const buildPlatformAccountConnections = (
+  wechatStatus: WechatDraftConfigStatus,
+): PlatformAccountConnection[] => [
+  {
+    platformId: "wechat",
+    platformName: "微信公众号",
+    status: wechatStatus.configured ? "草稿同步试点" : "待配置",
+    capability: wechatStatus.configured ? "可同步到公众号草稿箱" : "等待后端配置后启用草稿箱同步",
+    requirements: ["项目级 AppID / AppSecret", "草稿箱接口权限", "默认封面素材 media_id", "服务器 IP 白名单"],
+    actionLabel: "去同步草稿",
+    enabled: true,
+    note: wechatStatus.message,
+  },
+  {
+    platformId: "zhihu",
+    platformName: "知乎",
+    status: "待接入",
+    capability: "预留文章/问答内容导出与后续授权入口",
+    requirements: ["开放平台写入能力确认", "账号授权流程", "内容审核规则"],
+    actionLabel: "预留接口",
+    enabled: false,
+    note: "当前公开能力更偏数据查询，本次先保留半自动发布。",
+  },
+  {
+    platformId: "bilibili",
+    platformName: "B站",
+    status: "待接入",
+    capability: "预留视频稿件/专栏发布接入入口",
+    requirements: ["创作者认证", "分区和封面素材", "稿件审核规则"],
+    actionLabel: "预留接口",
+    enabled: false,
+    note: "B站更偏视频投稿，本次不接真实投稿 API。",
+  },
+  {
+    platformId: "xiaohongshu",
+    platformName: "小红书",
+    status: "待接入",
+    capability: "预留图文笔记发布前校验和后续授权入口",
+    requirements: ["商家/服务商能力确认", "封面图和话题规则", "风控审核要求"],
+    actionLabel: "预留接口",
+    enabled: false,
+    note: "当前公开入口更偏商家和电商服务，本次先保留半自动发布。",
+  },
+];
 
 const stateLabel: Record<PublishState, string> = {
   idle: "未发布",
@@ -393,6 +441,12 @@ function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [canFallbackToMock, setCanFallbackToMock] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isSyncingWechatDraft, setIsSyncingWechatDraft] = useState(false);
+  const [wechatConfigStatus, setWechatConfigStatus] = useState<WechatDraftConfigStatus>({
+    configured: false,
+    message: "正在检查微信公众号草稿箱配置。",
+  });
+  const [isCheckingWechatConfig, setIsCheckingWechatConfig] = useState(false);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
   const [copyNotice, setCopyNotice] = useState("");
   const [showPublishChecklist, setShowPublishChecklist] = useState(false);
@@ -417,6 +471,10 @@ function App() {
   const currentUserId = session?.user.id;
   const currentEmail = session?.user.email ?? "";
   const authReady = isAuthConfigured();
+  const platformAccountConnections = useMemo(
+    () => buildPlatformAccountConnections(wechatConfigStatus),
+    [wechatConfigStatus],
+  );
 
   const loadProfile = async (nextSession: Session | null) => {
     if (!nextSession?.user) {
@@ -428,6 +486,21 @@ function App() {
     const loadedProfile = await getProfile(nextSession.user.id, nextSession.user.email ?? "");
     setProfile(loadedProfile);
     setProfileNickname(loadedProfile.nickname);
+  };
+
+  const refreshWechatConfigStatus = async () => {
+    setIsCheckingWechatConfig(true);
+    try {
+      const status = await getWechatDraftConfigStatus();
+      setWechatConfigStatus(status);
+    } catch (caught) {
+      setWechatConfigStatus({
+        configured: false,
+        message: caught instanceof Error ? caught.message : "读取微信公众号草稿箱配置失败。",
+      });
+    } finally {
+      setIsCheckingWechatConfig(false);
+    }
   };
 
   const refreshSavedRecords = async (ownerId = currentUserId) => {
@@ -466,6 +539,7 @@ function App() {
     };
 
     void initAuth();
+    void refreshWechatConfigStatus();
 
     return onAuthSessionChange((nextSession) => {
       setSession(nextSession);
@@ -848,6 +922,95 @@ function App() {
     }
   };
 
+  const syncActiveWechatDraft = async () => {
+    if (!activeDraft || activeDraft.platformId !== "wechat") {
+      setCopyNotice("请先切换到微信公众号草稿，再同步草稿箱。");
+      return;
+    }
+
+    if (storageMode === "supabase" && !currentUserId) {
+      setError("请先登录账号，再同步微信公众号草稿箱。同步结果会写入当前账号的发布记录。");
+      setActiveView("profile");
+      return;
+    }
+
+    const draftIssues = getValidationIssues([activeDraft]);
+    if (draftIssues.length > 0) {
+      setError(`同步前请先补齐字段：${draftIssues.map((issue) => issue.field).join("、")}。`);
+      return;
+    }
+
+    setError("");
+    setCopyNotice("");
+    setIsSyncingWechatDraft(true);
+    setPublishResults((current) => ({
+      ...current,
+      wechat: {
+        platformId: "wechat",
+        state: "publishing",
+        message: "正在同步到微信公众号草稿箱",
+      },
+    }));
+
+    try {
+      const result = await syncWechatDraft(activeDraft);
+      const publishResult: PublishResult = {
+        platformId: "wechat",
+        state: result.state,
+        message: result.draftMediaId ? `${result.message} 草稿 media_id：${result.draftMediaId}` : result.message,
+        publishedAt: new Date(result.publishedAt ?? Date.now()).toLocaleTimeString("zh-CN", {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        failureReason: result.failureReason,
+      };
+      const attempt: PublishAttempt = {
+        id: `wechat-draft-${Date.now()}`,
+        platformId: "wechat",
+        platformName: activeDraft.platformName,
+        state: publishResult.state,
+        message: publishResult.message,
+        retryCount: retryCounts.wechat,
+        createdAt: publishResult.publishedAt ?? new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
+        failureReason: publishResult.failureReason,
+      };
+
+      setPublishResults((current) => ({ ...current, wechat: publishResult }));
+      setPublishAttempts((current) => [attempt, ...current]);
+      setCopyNotice(publishResult.message);
+      void saveCurrentRecord([attempt, ...publishAttempts]);
+      void refreshWechatConfigStatus();
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "公众号草稿箱同步失败。";
+      const publishedAt = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+      const publishResult: PublishResult = {
+        platformId: "wechat",
+        state: "failed",
+        message,
+        publishedAt,
+        failureReason: message,
+      };
+      const attempt: PublishAttempt = {
+        id: `wechat-draft-${Date.now()}`,
+        platformId: "wechat",
+        platformName: activeDraft.platformName,
+        state: "failed",
+        message,
+        retryCount: retryCounts.wechat,
+        createdAt: publishedAt,
+        failureReason: message,
+      };
+
+      setPublishResults((current) => ({ ...current, wechat: publishResult }));
+      setPublishAttempts((current) => [attempt, ...current]);
+      setCopyNotice(message);
+      void saveCurrentRecord([attempt, ...publishAttempts]);
+      void refreshWechatConfigStatus();
+    } finally {
+      setIsSyncingWechatDraft(false);
+    }
+  };
+
   const copyActiveDraft = async () => {
     if (!activeDraft) {
       setCopyNotice("请先生成一个平台版本，再复制发布内容。");
@@ -880,9 +1043,9 @@ function App() {
         <div className="brand-lockup" aria-label="CreatorSync 内容开发助手">
           <LogoMark />
           <div>
-            <p className="eyebrow">CreatorSync V6</p>
+            <p className="eyebrow">CreatorSync V7</p>
             <h1>内容开发助手</h1>
-            <p className="topbar-copy">半自动发布清单版，支持 DeepSeek 和 Mock AI 双模式。</p>
+            <p className="topbar-copy">公众号草稿箱同步试点版，支持 DeepSeek 和 Mock AI 双模式。</p>
           </div>
         </div>
 
@@ -1112,9 +1275,11 @@ function App() {
             activeDraft={activeDraft}
             checklist={publishChecklist}
             copyNotice={copyNotice}
+            isSyncingWechatDraft={isSyncingWechatDraft}
             showChecklist={showPublishChecklist}
             onCopy={copyActiveDraft}
             onOpenEntry={openActivePublishEntry}
+            onSyncWechatDraft={() => void syncActiveWechatDraft()}
             onToggleChecklist={() => setShowPublishChecklist((current) => !current)}
           />
 
@@ -1177,6 +1342,8 @@ function App() {
           authReady={authReady}
           session={session}
           profile={profile}
+          platformConnections={platformAccountConnections}
+          wechatConfigStatus={wechatConfigStatus}
           authMode={authMode}
           authEmail={authEmail}
           authPassword={authPassword}
@@ -1184,6 +1351,7 @@ function App() {
           authNotice={authNotice}
           isAuthenticating={isAuthenticating}
           isUploadingAvatar={isUploadingAvatar}
+          isCheckingWechatConfig={isCheckingWechatConfig}
           onAuthModeChange={setAuthMode}
           onAuthEmailChange={setAuthEmail}
           onAuthPasswordChange={setAuthPassword}
@@ -1192,6 +1360,11 @@ function App() {
           onSignOut={() => void handleSignOut()}
           onProfileSave={() => void handleProfileSave()}
           onAvatarChange={(file) => void handleAvatarChange(file)}
+          onOpenWechatWorkspace={() => {
+            setActivePlatform("wechat");
+            setActiveView("workspace");
+          }}
+          onRefreshWechatConfig={() => void refreshWechatConfigStatus()}
         />
       ) : null}
 
@@ -1378,6 +1551,8 @@ function ProfilePage({
   authReady,
   session,
   profile,
+  platformConnections,
+  wechatConfigStatus,
   authMode,
   authEmail,
   authPassword,
@@ -1385,6 +1560,7 @@ function ProfilePage({
   authNotice,
   isAuthenticating,
   isUploadingAvatar,
+  isCheckingWechatConfig,
   onAuthModeChange,
   onAuthEmailChange,
   onAuthPasswordChange,
@@ -1393,6 +1569,8 @@ function ProfilePage({
   onSignOut,
   onProfileSave,
   onAvatarChange,
+  onOpenWechatWorkspace,
+  onRefreshWechatConfig,
 }: {
   generatedCount: number;
   publishCount: number;
@@ -1400,6 +1578,8 @@ function ProfilePage({
   authReady: boolean;
   session: Session | null;
   profile?: UserProfile;
+  platformConnections: PlatformAccountConnection[];
+  wechatConfigStatus: WechatDraftConfigStatus;
   authMode: "sign-in" | "sign-up";
   authEmail: string;
   authPassword: string;
@@ -1407,6 +1587,7 @@ function ProfilePage({
   authNotice: string;
   isAuthenticating: boolean;
   isUploadingAvatar: boolean;
+  isCheckingWechatConfig: boolean;
   onAuthModeChange: (mode: "sign-in" | "sign-up") => void;
   onAuthEmailChange: (value: string) => void;
   onAuthPasswordChange: (value: string) => void;
@@ -1415,6 +1596,8 @@ function ProfilePage({
   onSignOut: () => void;
   onProfileSave: () => void;
   onAvatarChange: (file?: File) => void;
+  onOpenWechatWorkspace: () => void;
+  onRefreshWechatConfig: () => void;
 }) {
   const email = session?.user.email ?? profile?.email ?? "";
 
@@ -1440,6 +1623,53 @@ function ProfilePage({
           <span>生成版本 <strong>{generatedCount}</strong></span>
           <span>发布记录 <strong>{publishCount}</strong></span>
           <span>账号状态 <strong>{session ? "已登录" : "未登录"}</strong></span>
+        </div>
+      </article>
+
+      <article className="page-card platform-account-card">
+        <div className="page-heading compact-heading">
+          <div>
+            <p className="eyebrow">Platform Accounts</p>
+            <h2>平台账号接入</h2>
+          </div>
+          <button className="ghost-action" type="button" onClick={onRefreshWechatConfig} disabled={isCheckingWechatConfig}>
+            {isCheckingWechatConfig ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />}
+            刷新状态
+          </button>
+        </div>
+        <p className="section-copy">
+          本次先做微信公众号项目级草稿箱同步，其余平台保留接入入口。这里不会保存你的平台账号密码。
+        </p>
+        <div className="platform-account-grid">
+          {platformConnections.map((connection) => (
+            <article className={`platform-account-item ${connection.enabled ? "enabled" : "reserved"}`} key={connection.platformId}>
+              <div className="platform-account-head">
+                <div>
+                  <PlatformLogo platformId={connection.platformId} />
+                  <strong>{connection.platformName}</strong>
+                </div>
+                <span className={connection.enabled && wechatConfigStatus.configured ? "status-pill success" : "status-pill"}>
+                  {connection.status}
+                </span>
+              </div>
+              <p>{connection.capability}</p>
+              <div className="api-list">
+                {connection.requirements.map((item) => (
+                  <span key={item}>{item}</span>
+                ))}
+              </div>
+              <p className="save-note">{connection.note}</p>
+              <button
+                className={connection.enabled ? "secondary-action" : "ghost-action"}
+                type="button"
+                onClick={connection.enabled ? onOpenWechatWorkspace : undefined}
+                disabled={!connection.enabled}
+              >
+                {connection.enabled ? <Send size={16} /> : <PlugZap size={16} />}
+                {connection.actionLabel}
+              </button>
+            </article>
+          ))}
         </div>
       </article>
 
@@ -1797,17 +2027,21 @@ function SemiAutoPublishPanel({
   activeDraft,
   checklist,
   copyNotice,
+  isSyncingWechatDraft,
   showChecklist,
   onCopy,
   onOpenEntry,
+  onSyncWechatDraft,
   onToggleChecklist,
 }: {
   activeDraft?: PlatformDraft;
   checklist: PublishChecklistItem[];
   copyNotice: string;
+  isSyncingWechatDraft: boolean;
   showChecklist: boolean;
   onCopy: () => void;
   onOpenEntry: () => void;
+  onSyncWechatDraft: () => void;
   onToggleChecklist: () => void;
 }) {
   const activeProfile = activeDraft
@@ -1828,6 +2062,12 @@ function SemiAutoPublishPanel({
         当前不会保存平台账号密码，也不会直接调用真实发布接口。这里先把可复制内容、发布入口和人工检查清单准备好。
       </p>
       <div className="semi-actions">
+        {activeDraft?.platformId === "wechat" ? (
+          <button className="primary-action" type="button" onClick={onSyncWechatDraft} disabled={isSyncingWechatDraft}>
+            {isSyncingWechatDraft ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
+            同步公众号草稿箱
+          </button>
+        ) : null}
         <button className="secondary-action" type="button" onClick={onCopy} disabled={!activeDraft}>
           <Copy size={16} />
           复制发布内容

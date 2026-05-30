@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-第六次迭代重点梳理真实平台接入限制，并提供半自动发布清单。真实 AI 仍然通过后端代理调用；真实平台发布暂不一键直发，而是先支持复制内容、打开发布入口和发布前检查。
+第七次迭代新增平台账号接入中心，并把微信公众号作为草稿箱同步试点。真实 AI 仍然通过后端代理调用；真实平台发布暂不做群发，只先支持把公众号图文同步到草稿箱。
 
 - 原始标题、正文、内容类型、目标受众、生成偏好输入
 - 公众号、知乎、B站、小红书平台选择
@@ -19,6 +19,7 @@
 - DeepSeek 调用失败时给出提示，并允许回退到 Mock AI
 - 每个平台展示授权状态、所需权限、接入限制和发布入口
 - 生成半自动发布清单，并支持复制当前平台发布内容
+- 个人中心展示四个平台账号接入状态，微信公众号支持草稿箱同步试点
 - 平台适配器结构，方便后续扩展抖音、视频号、微博
 
 ## 本地运行
@@ -58,6 +59,17 @@ DEEPSEEK_MODEL=deepseek-chat
 
 `DEEPSEEK_MODEL` 可以不填，默认使用 `deepseek-chat`。注意：不要把 `DEEPSEEK_API_KEY` 写入 `.env.local`、前端代码或 GitHub Pages 构建变量，因为浏览器产物会被用户看到。
 
+微信公众号草稿箱同步也只在后端读取密钥：
+
+```bash
+WECHAT_APP_ID=你的公众号 AppID
+WECHAT_APP_SECRET=你的公众号 AppSecret
+WECHAT_DEFAULT_THUMB_MEDIA_ID=已上传到公众号素材库的默认封面 media_id
+WECHAT_DEFAULT_AUTHOR=可选，默认 CreatorSync
+```
+
+`WECHAT_APP_SECRET` 不能放进前端 `.env.local` 或 GitHub Pages 构建变量。前端只配置 `VITE_AI_API_BASE_URL`，然后请求后端的 `/api/wechat/draft`。
+
 GitHub Pages 上线时，还需要在 GitHub 仓库的 `Settings -> Secrets and variables -> Actions` 中添加同名 Secrets：
 
 - `VITE_SUPABASE_URL`
@@ -83,7 +95,7 @@ npm run build
 - `typescript`：代码类型检查。
 - `lucide-react`：页面里的图标。
 - `@supabase/supabase-js`：第四次迭代用于连接 Supabase Auth、Storage 和数据库。
-- Vercel Serverless / Supabase Edge Functions：第五次迭代用于部署 DeepSeek 后端代理，不新增前端 npm 依赖。
+- Vercel Serverless / Supabase Edge Functions：第五次迭代用于部署 DeepSeek 后端代理，第七次迭代继续用于微信公众号草稿箱代理，不新增前端 npm 依赖。
 
 原创功能部分：
 
@@ -93,6 +105,7 @@ npm run build
 - 平台预览、编辑、模拟发布、发布失败重试和发布记录。
 - 第四次迭代的真实账号和数据保存流程：邮箱密码登录、头像上传、保存当前内容方案、读取当前账号历史内容、重新打开草稿、持久化模拟发布记录，并在 Supabase 未配置时提供本地保存兜底。
 - 真实能力预研区和迭代规划说明。
+- 第七次迭代的平台账号接入中心、公众号草稿同步前端流程和微信后端代理封装。
 
 ## 产品流程
 
@@ -370,3 +383,45 @@ Vercel 后端也可以继续使用：
 2. 打开工作台，输入内容并生成平台版本。
 3. 清空标题、标签或小红书封面标题，确认发布前检查能提示问题。
 4. 点击“复制发布内容”“打开发布入口”“生成清单”，确认半自动发布流程可用。
+
+## 第七次迭代实现说明
+
+本次第七次迭代按“平台账号接入中心与微信公众号草稿箱同步”落地。它先把平台账号接入入口放到个人中心，同时只让微信公众号进入真实草稿箱同步试点。
+
+已增加内容：
+
+- 工作台顶部更新为 `CreatorSync V7`，说明当前是公众号草稿箱同步试点版。
+- 个人中心新增“四个平台账号接入”区域：微信公众号显示草稿箱同步试点，知乎、B站、小红书显示待接入和后续所需条件。
+- 微信公众号草稿新增“同步公众号草稿箱”按钮，调用后端 `/api/wechat/draft`。
+- 后端新增 Vercel Serverless 入口 `api/wechat/draft.js`，Supabase Edge Function 也支持 `/api/wechat/draft` 路径。
+- 同步成功或失败都会进入现有发布记录；如果当前方案可保存，也会复用原有保存流程写入记录。
+
+微信公众号配置方式：
+
+1. 在公众号后台准备 AppID、AppSecret，并确认服务器 IP 白名单。
+2. 先上传默认封面图到公众号永久素材，拿到 `thumb_media_id`。
+3. 在 Vercel 或 Supabase Edge Function 环境变量中配置 `WECHAT_APP_ID`、`WECHAT_APP_SECRET`、`WECHAT_DEFAULT_THUMB_MEDIA_ID`。
+4. 前端继续通过 `VITE_AI_API_BASE_URL` 请求后端，完整路径是 `/api/wechat/draft`。
+5. 打开个人中心，刷新平台账号状态；如果后端配置完整，微信公众号卡片会显示草稿同步试点。
+
+本次仍然不做：
+
+- 不做用户级公众号 OAuth 授权，也不让用户在浏览器里输入或保存公众号密钥。
+- 不做公众号群发发布，只同步到草稿箱，最终预览和发布仍在微信公众平台后台完成。
+- 不接入知乎、B站、小红书真实发布 API，只保留接入中心入口和后续扩展结构。
+
+平台判断来源：
+
+- 微信公众号草稿箱接口可作为图文草稿同步方向，但需要后端保管密钥、素材上传和白名单配置，文档入口：`https://developers.weixin.qq.com/doc/offiaccount/Draft_Box/Add_draft.html`。
+- 微信公众号获取接口调用凭据需要 AppID/AppSecret，文档入口：`https://developers.weixin.qq.com/doc/offiaccount/Basic_Information/Get_access_token.html`。
+- B站开放平台文档入口是 `https://openhome.bilibili.com/doc`，本次继续作为后续视频或专栏能力预研。
+- 知乎数据开放平台入口是 `https://developer.zhihu.com/`，本次继续保留待接入状态。
+- 小红书开放平台入口是 `https://open.xiaohongshu.com/`，本次继续保留待接入状态。
+
+推荐验证方式：
+
+1. 运行 `npm run build`。
+2. 不配置微信环境变量时，打开个人中心确认微信公众号显示未配置或待配置。
+3. 生成微信公众号草稿后点击“同步公众号草稿箱”，确认页面给出清楚失败提示，并记录失败状态。
+4. 配置微信环境变量后重新部署后端，重新点击同步，确认微信返回成功后页面展示草稿 `media_id`。
+5. 回归检查 Mock AI、DeepSeek、保存当前方案、发布记录页、个人中心仍可正常打开。

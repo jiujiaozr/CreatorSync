@@ -8,6 +8,15 @@ type SourceContent = {
   preference?: string;
 };
 
+type PlatformDraft = {
+  platformId: PlatformId;
+  platformName?: string;
+  title?: string;
+  subtitle?: string;
+  body?: string;
+  meta?: Record<string, string>;
+};
+
 const platformDefinitions: Record<PlatformId, { name: string; metaFields: string[] }> = {
   wechat: {
     name: "微信公众号",
@@ -41,6 +50,147 @@ const sendJson = (body: unknown, status = 200) =>
       "Content-Type": "application/json; charset=utf-8",
     },
   });
+
+const wechatEnvKeys = ["WECHAT_APP_ID", "WECHAT_APP_SECRET", "WECHAT_DEFAULT_THUMB_MEDIA_ID"] as const;
+
+const getMissingWechatConfig = () => wechatEnvKeys.filter((key) => !Deno.env.get(key));
+
+const htmlEscape = (value: unknown) =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+const bodyToWechatHtml = (body: unknown) =>
+  String(body ?? "")
+    .split(/\n{2,}|\r\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .map((paragraph) => `<p>${htmlEscape(paragraph).replace(/\n/g, "<br/>")}</p>`)
+    .join("");
+
+const assertWechatDraft = (payload: { draft?: PlatformDraft }) => {
+  const draft = payload.draft;
+  if (!draft || typeof draft !== "object" || draft.platformId !== "wechat") {
+    throw new Error("请先选择微信公众号草稿，再同步到公众号草稿箱。");
+  }
+
+  if (!String(draft.title ?? "").trim()) {
+    throw new Error("公众号标题不能为空。");
+  }
+
+  if (!String(draft.body ?? "").trim()) {
+    throw new Error("公众号正文不能为空。");
+  }
+
+  return draft;
+};
+
+const getWechatAccessToken = async () => {
+  const appId = Deno.env.get("WECHAT_APP_ID") || "";
+  const appSecret = Deno.env.get("WECHAT_APP_SECRET") || "";
+  const url = new URL("https://api.weixin.qq.com/cgi-bin/token");
+  url.searchParams.set("grant_type", "client_credential");
+  url.searchParams.set("appid", appId);
+  url.searchParams.set("secret", appSecret);
+
+  const response = await fetch(url);
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data?.access_token) {
+    const detail = data?.errmsg || `HTTP ${response.status}`;
+    throw new Error(`微信 access_token 获取失败：${detail}`);
+  }
+
+  return data.access_token as string;
+};
+
+const addWechatDraft = async (accessToken: string, draft: PlatformDraft) => {
+  const digest = String(draft.meta?.summary || draft.subtitle || "")
+    .trim()
+    .slice(0, 120);
+  const response = await fetch(`https://api.weixin.qq.com/cgi-bin/draft/add?access_token=${accessToken}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      articles: [
+        {
+          title: String(draft.title).trim().slice(0, 64),
+          author: Deno.env.get("WECHAT_DEFAULT_AUTHOR") || "CreatorSync",
+          digest,
+          content: bodyToWechatHtml(draft.body),
+          content_source_url: "",
+          thumb_media_id: Deno.env.get("WECHAT_DEFAULT_THUMB_MEDIA_ID"),
+          need_open_comment: 0,
+          only_fans_can_comment: 0,
+        },
+      ],
+    }),
+  });
+
+  const data = await response.json().catch(() => null);
+  if (!response.ok || data?.errcode) {
+    const detail = data?.errmsg || `HTTP ${response.status}`;
+    throw new Error(`微信草稿箱同步失败：${detail}`);
+  }
+
+  return data as { media_id?: string };
+};
+
+const handleWechatDraft = async (request: Request) => {
+  if (request.method === "GET") {
+    const missing = getMissingWechatConfig();
+    return sendJson({
+      configured: missing.length === 0,
+      message: missing.length === 0 ? "微信公众号草稿箱后端配置已就绪。" : "微信公众号草稿箱后端还缺少必要配置。",
+      missing,
+    });
+  }
+
+  if (request.method !== "POST") {
+    return sendJson({ error: "只支持 GET、POST 和 OPTIONS 请求。" }, 405);
+  }
+
+  const missing = getMissingWechatConfig();
+  if (missing.length > 0) {
+    return sendJson(
+      {
+        error: "微信公众号草稿箱后端还没有配置完整，暂时不能真实同步。",
+        missing,
+      },
+      500,
+    );
+  }
+
+  try {
+    const draft = assertWechatDraft(await request.json());
+    const accessToken = await getWechatAccessToken();
+    const data = await addWechatDraft(accessToken, draft);
+    return sendJson({
+      ok: true,
+      platformId: "wechat",
+      state: "success",
+      message: "已同步到微信公众号草稿箱，请到微信公众平台后台继续预览和发布。",
+      draftMediaId: data.media_id,
+      publishedAt: new Date().toISOString(),
+    });
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : "公众号草稿箱同步失败。";
+    return sendJson(
+      {
+        ok: false,
+        platformId: "wechat",
+        state: "failed",
+        message,
+        failureReason: message,
+        publishedAt: new Date().toISOString(),
+      },
+      400,
+    );
+  }
+};
 
 const assertRequest = (payload: { source?: SourceContent; platformIds?: PlatformId[] }) => {
   const source = payload.source;
@@ -146,6 +296,11 @@ const normalizeDrafts = (drafts: unknown, platformIds: PlatformId[]) => {
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  const pathname = new URL(request.url).pathname;
+  if (pathname.endsWith("/api/wechat/draft")) {
+    return handleWechatDraft(request);
   }
 
   if (request.method !== "POST") {

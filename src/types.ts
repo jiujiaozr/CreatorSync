@@ -55,12 +55,23 @@ export type IntegrationCapability = {
 export type PlatformIntegrationProfile = {
   platformId: PlatformId;
   platformName: string;
-  authStatus: "未授权" | "需要企业/创作者认证" | "适合后续试点";
+  authStatus: "未授权" | "需要企业/创作者认证" | "适合后续试点" | "草稿同步试点";
   requiredPermissions: string[];
   apiDifficulty: "低" | "中" | "高";
   limitations: string[];
   publishEntryUrl: string;
   nextStep: string;
+};
+
+export type PlatformAccountConnection = {
+  platformId: PlatformId;
+  platformName: string;
+  status: "草稿同步试点" | "待配置" | "待接入";
+  capability: string;
+  requirements: string[];
+  actionLabel: string;
+  enabled: boolean;
+  note: string;
 };
 
 export type ValidationIssue = {
@@ -76,6 +87,22 @@ export type PublishChecklistItem = {
   label: string;
   status: "通过" | "待处理";
   detail: string;
+};
+
+export type WechatDraftSyncResult = {
+  ok: boolean;
+  platformId: "wechat";
+  state: PublishState;
+  message: string;
+  draftMediaId?: string;
+  failureReason?: string;
+  publishedAt?: string;
+};
+
+export type WechatDraftConfigStatus = {
+  configured: boolean;
+  message: string;
+  missing?: string[];
 };
 
 export type PublishAttempt = {
