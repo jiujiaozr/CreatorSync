@@ -52,11 +52,30 @@ export type IntegrationCapability = {
   description: string;
 };
 
+export type PlatformIntegrationProfile = {
+  platformId: PlatformId;
+  platformName: string;
+  authStatus: "未授权" | "需要企业/创作者认证" | "适合后续试点";
+  requiredPermissions: string[];
+  apiDifficulty: "低" | "中" | "高";
+  limitations: string[];
+  publishEntryUrl: string;
+  nextStep: string;
+};
+
 export type ValidationIssue = {
   platformId: PlatformId;
   platformName: string;
   field: string;
   message: string;
+};
+
+export type PublishChecklistItem = {
+  platformId: PlatformId;
+  platformName: string;
+  label: string;
+  status: "通过" | "待处理";
+  detail: string;
 };
 
 export type PublishAttempt = {
