@@ -25,9 +25,18 @@ npm install
 npm run dev
 ```
 
+本地开发默认打开 Vite 提示的地址，例如 `http://localhost:5173/`。如果要看一次打包后的本地预览，可以运行：
+
+```bash
+npm run preview:local
+```
+
+本地预览请打开 `http://127.0.0.1:4173/`。不要在本地预览地址后手动加 `/CreatorSync/`，这个路径只给 GitHub Pages 线上部署使用。
+
 如果要启用第四次迭代的 Supabase 登录、头像上传和云端保存，需要在本地创建 `.env.local`：
 
 ```bash
+VITE_BASE_PATH=/
 VITE_SUPABASE_URL=你的 Supabase Project URL
 VITE_SUPABASE_ANON_KEY=你的 Supabase anon public key
 ```
@@ -39,7 +48,7 @@ GitHub Pages 上线时，还需要在 GitHub 仓库的 `Settings -> Secrets and 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
 
-GitHub Actions 构建时会读取这两个 Secrets，并把它们打进前端产物里。
+GitHub Actions 构建时会读取这两个 Secrets，并把它们打进前端产物里。线上部署还会设置 `VITE_BASE_PATH=/CreatorSync/`，保证 GitHub Pages 的子路径可以正确加载资源。
 
 构建检查：
 

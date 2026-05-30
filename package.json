@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "preview:local": "npm run build && vite preview --host 127.0.0.1 --port 4173"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.2",
