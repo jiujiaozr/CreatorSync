@@ -19,30 +19,48 @@ import {
   PlugZap,
   RefreshCcw,
   RotateCcw,
+  Save,
   Send,
   Server,
   Settings,
   ShieldCheck,
   Sparkles,
   SquarePen,
+  UploadCloud,
   UserCircle,
   XCircle,
 } from "lucide-react";
+import type { Session } from "@supabase/supabase-js";
 import type { CSSProperties } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { adapterById, platformAdapters } from "./data/platformAdapters";
+import {
+  getCurrentSession,
+  getProfile,
+  isAuthConfigured,
+  onAuthSessionChange,
+  signInWithEmail,
+  signOut,
+  signUpWithEmail,
+  uploadAvatar,
+  upsertProfile,
+} from "./services/auth";
 import { mockGenerationProvider } from "./services/contentGeneration";
 import { simulatePublish } from "./services/publish";
+import { getContentRecord, getPersistenceMode, listContentRecords, saveContentRecord } from "./services/recordStorage";
 import type {
   ContentType,
   IntegrationCapability,
+  PersistenceMode,
   PlatformDraft,
   PlatformId,
   PublishAttempt,
   PublishResult,
   PublishState,
+  SavedContentRecord,
   SourceContent,
   TonePreference,
+  UserProfile,
   ValidationIssue,
 } from "./types";
 
@@ -112,30 +130,127 @@ const stateLabel: Record<PublishState, string> = {
   failed: "失败",
 };
 
+const storageModeLabel: Record<PersistenceMode, string> = {
+  supabase: "Supabase 数据库",
+  local: "浏览器本地保存",
+};
+
+const createEmptyDraftMap = (): Record<PlatformId, PlatformDraft | undefined> => ({
+  wechat: undefined,
+  zhihu: undefined,
+  bilibili: undefined,
+  xiaohongshu: undefined,
+});
+
+const createEmptyPublishResults = (): Record<PlatformId, PublishResult> => ({
+  wechat: emptyPublishResult("wechat"),
+  zhihu: emptyPublishResult("zhihu"),
+  bilibili: emptyPublishResult("bilibili"),
+  xiaohongshu: emptyPublishResult("xiaohongshu"),
+});
+
+const createEmptyRetryCounts = (): Record<PlatformId, number> => ({
+  wechat: 0,
+  zhihu: 0,
+  bilibili: 0,
+  xiaohongshu: 0,
+});
+
+const formatSavedAt = (value: string) =>
+  new Date(value).toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+const getInitials = (value?: string) => {
+  const text = value?.trim();
+  if (!text) {
+    return "CS";
+  }
+
+  return text.slice(0, 2).toUpperCase();
+};
+
+const getAuthErrorMessage = (caught: unknown, mode: "sign-in" | "sign-up") => {
+  const fallback = mode === "sign-in" ? "登录失败，请检查邮箱和密码。" : "注册失败，请检查邮箱、密码和 Supabase Auth 设置。";
+  const errorLike = caught as { message?: string; status?: number; code?: string };
+  const message = errorLike?.message ?? "";
+  const normalized = message.toLowerCase();
+
+  if (errorLike?.status === 429 || normalized.includes("rate limit") || normalized.includes("over_email_send_rate_limit")) {
+    return "注册请求被 Supabase 限流了。新项目默认邮件服务额度很低，请到 Supabase 的 Authentication -> Providers -> Email 里临时关闭 Confirm email，或稍后再试。";
+  }
+
+  if (normalized.includes("already registered") || normalized.includes("user already registered")) {
+    return "这个邮箱已经注册过了，请切换到登录，或者换一个邮箱注册。";
+  }
+
+  if (normalized.includes("password")) {
+    return "密码不符合 Supabase 要求，请换一个更强的密码，建议至少 8 位并包含大小写字母和数字。";
+  }
+
+  if (normalized.includes("email")) {
+    return "邮箱格式或邮箱验证设置有问题，请确认邮箱填写正确，并检查 Supabase 的 Email 登录设置。";
+  }
+
+  return message || fallback;
+};
+
+const buildDraftMap = (draftList: PlatformDraft[]) => {
+  const next = createEmptyDraftMap();
+  draftList.forEach((draft) => {
+    next[draft.platformId] = draft;
+  });
+  return next;
+};
+
+const buildPublishSnapshot = (attempts: PublishAttempt[]) => {
+  const results = createEmptyPublishResults();
+  const retries = createEmptyRetryCounts();
+
+  attempts.forEach((attempt) => {
+    if (results[attempt.platformId].state === "idle") {
+      results[attempt.platformId] = {
+        platformId: attempt.platformId,
+        state: attempt.state,
+        message: attempt.message,
+        failureReason: attempt.failureReason,
+        publishedAt: attempt.createdAt,
+      };
+    }
+
+    retries[attempt.platformId] = Math.max(retries[attempt.platformId], attempt.retryCount);
+  });
+
+  return { results, retries };
+};
+
 function App() {
   const [activeView, setActiveView] = useState<AppView>("workspace");
   const [source, setSource] = useState<SourceContent>(defaultSource);
   const [selectedPlatforms, setSelectedPlatforms] = useState<PlatformId[]>(initialPlatformIds);
-  const [drafts, setDrafts] = useState<Record<PlatformId, PlatformDraft | undefined>>({
-    wechat: undefined,
-    zhihu: undefined,
-    bilibili: undefined,
-    xiaohongshu: undefined,
-  });
+  const [drafts, setDrafts] = useState<Record<PlatformId, PlatformDraft | undefined>>(createEmptyDraftMap);
   const [activePlatform, setActivePlatform] = useState<PlatformId>("wechat");
-  const [publishResults, setPublishResults] = useState<Record<PlatformId, PublishResult>>({
-    wechat: emptyPublishResult("wechat"),
-    zhihu: emptyPublishResult("zhihu"),
-    bilibili: emptyPublishResult("bilibili"),
-    xiaohongshu: emptyPublishResult("xiaohongshu"),
-  });
+  const [publishResults, setPublishResults] = useState<Record<PlatformId, PublishResult>>(createEmptyPublishResults);
   const [publishAttempts, setPublishAttempts] = useState<PublishAttempt[]>([]);
-  const [retryCounts, setRetryCounts] = useState<Record<PlatformId, number>>({
-    wechat: 0,
-    zhihu: 0,
-    bilibili: 0,
-    xiaohongshu: 0,
-  });
+  const [retryCounts, setRetryCounts] = useState<Record<PlatformId, number>>(createEmptyRetryCounts);
+  const [savedRecords, setSavedRecords] = useState<SavedContentRecord[]>([]);
+  const [activeRecordId, setActiveRecordId] = useState<string | undefined>();
+  const [storageMode] = useState<PersistenceMode>(getPersistenceMode);
+  const [isSavingRecord, setIsSavingRecord] = useState(false);
+  const [isLoadingRecords, setIsLoadingRecords] = useState(false);
+  const [saveNotice, setSaveNotice] = useState("");
+  const [session, setSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<UserProfile | undefined>();
+  const [authMode, setAuthMode] = useState<"sign-in" | "sign-up">("sign-in");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [profileNickname, setProfileNickname] = useState("创作者");
+  const [authNotice, setAuthNotice] = useState("");
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
@@ -152,6 +267,66 @@ function App() {
     : validationIssues;
   const canGenerate = source.title.trim().length > 0 && source.body.trim().length > 0 && selectedPlatforms.length > 0;
   const canPublish = generatedDrafts.length > 0 && !isPublishing;
+  const canSaveRecord = source.title.trim().length > 0 && source.body.trim().length > 0 && !isSavingRecord;
+  const currentUserId = session?.user.id;
+  const currentEmail = session?.user.email ?? "";
+  const authReady = isAuthConfigured();
+
+  const loadProfile = async (nextSession: Session | null) => {
+    if (!nextSession?.user) {
+      setProfile(undefined);
+      setProfileNickname("创作者");
+      return;
+    }
+
+    const loadedProfile = await getProfile(nextSession.user.id, nextSession.user.email ?? "");
+    setProfile(loadedProfile);
+    setProfileNickname(loadedProfile.nickname);
+  };
+
+  const refreshSavedRecords = async (ownerId = currentUserId) => {
+    setIsLoadingRecords(true);
+    try {
+      if (storageMode === "supabase" && !ownerId) {
+        setSavedRecords([]);
+        setSaveNotice("请先登录账号，再查看云端历史内容。");
+        return;
+      }
+
+      const records = await listContentRecords(ownerId);
+      setSavedRecords(records);
+      setSaveNotice(
+        storageMode === "supabase"
+          ? "已从 Supabase 读取当前账号的历史内容。"
+          : "未配置 Supabase，当前使用浏览器本地保存演示。",
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "读取历史内容失败，请检查 Supabase 配置。");
+    } finally {
+      setIsLoadingRecords(false);
+    }
+  };
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        const currentSession = await getCurrentSession();
+        setSession(currentSession);
+        await loadProfile(currentSession);
+        await refreshSavedRecords(currentSession?.user.id);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "读取登录状态失败，请检查 Supabase 配置。");
+      }
+    };
+
+    void initAuth();
+
+    return onAuthSessionChange((nextSession) => {
+      setSession(nextSession);
+      void loadProfile(nextSession);
+      void refreshSavedRecords(nextSession?.user.id);
+    });
+  }, []);
 
   const updateSource = <K extends keyof SourceContent>(key: K, value: SourceContent[K]) => {
     setSource((current) => ({ ...current, [key]: value }));
@@ -208,12 +383,9 @@ function App() {
         return reset;
       });
       setPublishAttempts([]);
-      setRetryCounts({
-        wechat: 0,
-        zhihu: 0,
-        bilibili: 0,
-        xiaohongshu: 0,
-      });
+      setRetryCounts(createEmptyRetryCounts());
+      setActiveRecordId(undefined);
+      setSaveNotice("已生成新的平台草稿，保存后刷新页面也能重新打开。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "生成失败，请稍后重试。");
     } finally {
@@ -258,11 +430,175 @@ function App() {
     });
   };
 
-  const publishDraft = async (draft: PlatformDraft, retryCount: number) => {
+  const saveCurrentRecord = async (attempts = publishAttempts) => {
+    if (storageMode === "supabase" && !currentUserId) {
+      setError("请先登录账号，再保存内容方案。");
+      setActiveView("profile");
+      return undefined;
+    }
+
+    setIsSavingRecord(true);
+    setError("");
+
+    try {
+      const result = await saveContentRecord({
+        id: activeRecordId,
+        userId: currentUserId,
+        source,
+        selectedPlatforms,
+        drafts: generatedDrafts,
+        publishAttempts: attempts,
+      });
+
+      setActiveRecordId(result.record.id);
+      setSavedRecords((current) => [result.record, ...current.filter((record) => record.id !== result.record.id)]);
+      setSaveNotice(`已保存到${storageModeLabel[result.mode]}：${formatSavedAt(result.record.updatedAt)}。`);
+      return result.record;
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "保存失败，请检查 Supabase 环境变量和数据表。");
+      return undefined;
+    } finally {
+      setIsSavingRecord(false);
+    }
+  };
+
+  const openSavedRecord = async (recordId: string) => {
+    setIsLoadingRecords(true);
+    setError("");
+
+    try {
+      const record = await getContentRecord(recordId);
+      if (!record) {
+        setError("没有找到这条历史内容，可能已经被删除。");
+        return;
+      }
+
+      setSource(record.source);
+      setSelectedPlatforms(record.selectedPlatforms);
+      setDrafts(buildDraftMap(record.drafts));
+      setActivePlatform(record.drafts[0]?.platformId ?? record.selectedPlatforms[0] ?? "wechat");
+      setPublishAttempts(record.publishAttempts);
+      const snapshot = buildPublishSnapshot(record.publishAttempts);
+      setPublishResults(snapshot.results);
+      setRetryCounts(snapshot.retries);
+      setActiveRecordId(record.id);
+      setSaveNotice(`已打开历史内容：${formatSavedAt(record.updatedAt)}。`);
+      setActiveView("workspace");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "打开历史内容失败。");
+    } finally {
+      setIsLoadingRecords(false);
+    }
+  };
+
+  const handleAuthSubmit = async () => {
+    if (!authReady) {
+      setAuthNotice("请先配置 Supabase 环境变量，才能使用真实登录。");
+      return;
+    }
+
+    if (!authEmail.trim() || !authPassword.trim()) {
+      setAuthNotice("请填写邮箱和密码。");
+      return;
+    }
+
+    setIsAuthenticating(true);
+    setAuthNotice("");
+    setError("");
+
+    try {
+      const nextSession =
+        authMode === "sign-in"
+          ? await signInWithEmail(authEmail.trim(), authPassword)
+          : await signUpWithEmail(authEmail.trim(), authPassword, profileNickname.trim() || "创作者");
+
+      setSession(nextSession);
+      await loadProfile(nextSession);
+      await refreshSavedRecords(nextSession?.user.id);
+      setAuthNotice(
+        authMode === "sign-in"
+          ? "登录成功，已读取你的历史内容。"
+          : nextSession
+            ? "注册成功，已创建个人资料。"
+            : "注册请求已提交，请先到邮箱完成确认；如果只是本地验收，可以在 Supabase 里临时关闭 Confirm email。",
+      );
+      setAuthPassword("");
+    } catch (caught) {
+      setAuthNotice(getAuthErrorMessage(caught, authMode));
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    setIsAuthenticating(true);
+    setAuthNotice("");
+
+    try {
+      await signOut();
+      setSession(null);
+      setProfile(undefined);
+      setSavedRecords([]);
+      setActiveRecordId(undefined);
+      setAuthNotice("已退出登录。");
+      setSaveNotice("已退出登录，云端历史内容会在下次登录后读取。");
+    } catch (caught) {
+      setAuthNotice(caught instanceof Error ? caught.message : "退出登录失败，请稍后重试。");
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleProfileSave = async () => {
+    if (!currentUserId || !currentEmail) {
+      setAuthNotice("请先登录账号，再保存个人资料。");
+      return;
+    }
+
+    setIsAuthenticating(true);
+    setAuthNotice("");
+
+    try {
+      const nextProfile = await upsertProfile(currentUserId, currentEmail, profileNickname.trim() || "创作者");
+      setProfile(nextProfile);
+      setAuthNotice("个人资料已保存。");
+    } catch (caught) {
+      setAuthNotice(caught instanceof Error ? caught.message : "保存个人资料失败。");
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleAvatarChange = async (file?: File) => {
+    if (!file) {
+      return;
+    }
+
+    if (!currentUserId || !currentEmail) {
+      setAuthNotice("请先登录账号，再上传头像。");
+      return;
+    }
+
+    setIsUploadingAvatar(true);
+    setAuthNotice("");
+
+    try {
+      const nextProfile = await uploadAvatar(currentUserId, currentEmail, file);
+      setProfile(nextProfile);
+      setProfileNickname(nextProfile.nickname);
+      setAuthNotice("头像已上传。");
+    } catch (caught) {
+      setAuthNotice(caught instanceof Error ? caught.message : "头像上传失败，请检查 avatars bucket。");
+    } finally {
+      setIsUploadingAvatar(false);
+    }
+  };
+
+  const publishDraft = async (draft: PlatformDraft, retryCount: number): Promise<PublishAttempt | undefined> => {
     const draftIssues = getValidationIssues([draft]);
     if (draftIssues.length > 0) {
       setError(`${draft.platformName}还有字段没有补齐：${draftIssues.map((issue) => issue.field).join("、")}。`);
-      return;
+      return undefined;
     }
 
     setPublishResults((current) => ({
@@ -279,19 +615,18 @@ function App() {
       ...current,
       [draft.platformId]: result,
     }));
-    setPublishAttempts((current) => [
-      {
-        id: `${draft.platformId}-${Date.now()}`,
-        platformId: draft.platformId,
-        platformName: draft.platformName,
-        state: result.state,
-        message: result.message,
-        retryCount,
-        createdAt: result.publishedAt ?? new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
-        failureReason: result.failureReason,
-      },
-      ...current,
-    ]);
+    const attempt = {
+      id: `${draft.platformId}-${Date.now()}`,
+      platformId: draft.platformId,
+      platformName: draft.platformName,
+      state: result.state,
+      message: result.message,
+      retryCount,
+      createdAt: result.publishedAt ?? new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
+      failureReason: result.failureReason,
+    };
+    setPublishAttempts((current) => [attempt, ...current]);
+    return attempt;
   };
 
   const publishAll = async () => {
@@ -322,11 +657,19 @@ function App() {
       return next;
     });
 
+    const nextAttempts: PublishAttempt[] = [];
     for (const draft of generatedDrafts) {
-      await publishDraft(draft, retryCounts[draft.platformId]);
+      const attempt = await publishDraft(draft, retryCounts[draft.platformId]);
+      if (attempt) {
+        nextAttempts.push(attempt);
+      }
     }
 
     setIsPublishing(false);
+
+    if (activeRecordId && nextAttempts.length > 0) {
+      void saveCurrentRecord([...nextAttempts.reverse(), ...publishAttempts]);
+    }
   };
 
   const retryPublish = async (platformId: PlatformId) => {
@@ -342,8 +685,12 @@ function App() {
     }));
     setError("");
     setIsPublishing(true);
-    await publishDraft(draft, nextRetryCount);
+    const attempt = await publishDraft(draft, nextRetryCount);
     setIsPublishing(false);
+
+    if (activeRecordId && attempt) {
+      void saveCurrentRecord([attempt, ...publishAttempts]);
+    }
   };
 
   return (
@@ -352,9 +699,9 @@ function App() {
         <div className="brand-lockup" aria-label="CreatorSync 内容开发助手">
           <LogoMark />
           <div>
-            <p className="eyebrow">CreatorSync V3</p>
+            <p className="eyebrow">CreatorSync V4</p>
             <h1>内容开发助手</h1>
-            <p className="topbar-copy">真实能力预研可视化版，不接真实接口也能讲清未来怎么落地。</p>
+            <p className="topbar-copy">真实登录与头像上传版，内容方案会保存到当前账号下。</p>
           </div>
         </div>
 
@@ -378,11 +725,13 @@ function App() {
         <div className="user-area">
           <div className="status-strip" aria-label="项目状态">
             <span><CheckCircle2 size={16} /> Mock AI</span>
-            <span><ShieldCheck size={16} /> 发布前检查</span>
+            <span><ShieldCheck size={16} /> {session ? "已登录" : "未登录"}</span>
           </div>
           <button className="avatar-button" type="button" onClick={() => setActiveView("profile")} aria-label="进入个人中心">
-            <span className="avatar-face">CS</span>
-            <span className="avatar-name">创作者</span>
+            <span className="avatar-face">
+              {profile?.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : getInitials(profile?.nickname ?? currentEmail)}
+            </span>
+            <span className="avatar-name">{profile?.nickname ?? (session ? "已登录" : "登录")}</span>
           </button>
         </div>
       </header>
@@ -485,6 +834,18 @@ function App() {
             </div>
           ) : null}
 
+          <div className="save-box">
+            <div>
+              <strong>第四次迭代保存</strong>
+              <span>{storageMode === "supabase" && !session ? "登录后保存到 Supabase" : storageModeLabel[storageMode]}</span>
+            </div>
+            <button className="secondary-action" type="button" onClick={() => void saveCurrentRecord()} disabled={!canSaveRecord}>
+              {isSavingRecord ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+              保存当前方案
+            </button>
+          </div>
+          {saveNotice ? <p className="save-note">{saveNotice}</p> : null}
+
           <button className="primary-action" type="button" onClick={generateDrafts} disabled={!canGenerate || isGenerating}>
             {isGenerating ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />}
             {isGenerating ? "生成中" : "生成平台内容"}
@@ -576,7 +937,16 @@ function App() {
       ) : null}
 
       {activeView === "records" ? (
-        <RecordsPage attempts={publishAttempts} onBackToWorkspace={() => setActiveView("workspace")} />
+        <RecordsPage
+          attempts={publishAttempts}
+          records={savedRecords}
+          activeRecordId={activeRecordId}
+          storageMode={storageMode}
+          isLoading={isLoadingRecords}
+          onBackToWorkspace={() => setActiveView("workspace")}
+          onOpenRecord={(recordId) => void openSavedRecord(recordId)}
+          onRefreshRecords={() => void refreshSavedRecords()}
+        />
       ) : null}
 
       {activeView === "integrations" ? (
@@ -584,7 +954,29 @@ function App() {
       ) : null}
 
       {activeView === "profile" ? (
-        <ProfilePage generatedCount={generatedDrafts.length} publishCount={publishAttempts.length} />
+        <ProfilePage
+          generatedCount={generatedDrafts.length}
+          publishCount={publishAttempts.length}
+          storageMode={storageMode}
+          authReady={authReady}
+          session={session}
+          profile={profile}
+          authMode={authMode}
+          authEmail={authEmail}
+          authPassword={authPassword}
+          profileNickname={profileNickname}
+          authNotice={authNotice}
+          isAuthenticating={isAuthenticating}
+          isUploadingAvatar={isUploadingAvatar}
+          onAuthModeChange={setAuthMode}
+          onAuthEmailChange={setAuthEmail}
+          onAuthPasswordChange={setAuthPassword}
+          onProfileNicknameChange={setProfileNickname}
+          onAuthSubmit={() => void handleAuthSubmit()}
+          onSignOut={() => void handleSignOut()}
+          onProfileSave={() => void handleProfileSave()}
+          onAvatarChange={(file) => void handleAvatarChange(file)}
+        />
       ) : null}
 
       {showPublishConfirm ? (
@@ -652,10 +1044,22 @@ function DashboardStats({
 
 function RecordsPage({
   attempts,
+  records,
+  activeRecordId,
+  storageMode,
+  isLoading,
   onBackToWorkspace,
+  onOpenRecord,
+  onRefreshRecords,
 }: {
   attempts: PublishAttempt[];
+  records: SavedContentRecord[];
+  activeRecordId?: string;
+  storageMode: PersistenceMode;
+  isLoading: boolean;
   onBackToWorkspace: () => void;
+  onOpenRecord: (recordId: string) => void;
+  onRefreshRecords: () => void;
 }) {
   return (
     <section className="page-grid records-page">
@@ -665,10 +1069,16 @@ function RecordsPage({
             <p className="eyebrow">Publish Records</p>
             <h2>发布记录</h2>
           </div>
-          <button className="secondary-action" type="button" onClick={onBackToWorkspace}>
-            <Home size={16} />
-            回到工作台
-          </button>
+          <div className="button-row">
+            <button className="secondary-action" type="button" onClick={onRefreshRecords} disabled={isLoading}>
+              {isLoading ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />}
+              刷新历史
+            </button>
+            <button className="secondary-action" type="button" onClick={onBackToWorkspace}>
+              <Home size={16} />
+              回到工作台
+            </button>
+          </div>
         </div>
         <PublishHistory attempts={attempts} />
       </article>
@@ -676,14 +1086,31 @@ function RecordsPage({
       <aside className="page-card side-card">
         <div className="panel-heading compact">
           <Database size={19} />
-          <h2>第四次迭代接口预留</h2>
+          <h2>历史内容</h2>
         </div>
-        <p>后端接入后，这里可以从服务端读取历史发布记录，而不是只保存当前页面里的临时状态。</p>
-        <div className="api-list">
-          <span>GET /api/publish-records</span>
-          <span>POST /api/publish-records/:id/retry</span>
-          <span>GET /api/content-drafts/:id</span>
-        </div>
+        <p>
+          当前保存方式：{storageModeLabel[storageMode]}。
+          {storageMode === "local" ? " 配置 Supabase 后，这里会读取云端数据。" : " 刷新页面后仍可重新打开已保存内容。"}
+        </p>
+        {records.length === 0 ? (
+          <p className="history-empty">还没有保存过内容方案。回到工作台点击“保存当前方案”后，这里会出现历史记录。</p>
+        ) : (
+          <div className="record-list">
+            {records.map((record) => (
+              <article className={`record-item ${record.id === activeRecordId ? "active" : ""}`} key={record.id}>
+                <div>
+                  <strong>{record.source.title}</strong>
+                  <span>
+                    {formatSavedAt(record.updatedAt)} · {record.drafts.length} 个草稿 · {record.publishAttempts.length} 条发布记录
+                  </span>
+                </div>
+                <button className="retry-action" type="button" onClick={() => onOpenRecord(record.id)}>
+                  打开
+                </button>
+              </article>
+            ))}
+          </div>
+        )}
       </aside>
     </section>
   );
@@ -728,39 +1155,158 @@ function IntegrationPage({ capabilities }: { capabilities: IntegrationCapability
 function ProfilePage({
   generatedCount,
   publishCount,
+  storageMode,
+  authReady,
+  session,
+  profile,
+  authMode,
+  authEmail,
+  authPassword,
+  profileNickname,
+  authNotice,
+  isAuthenticating,
+  isUploadingAvatar,
+  onAuthModeChange,
+  onAuthEmailChange,
+  onAuthPasswordChange,
+  onProfileNicknameChange,
+  onAuthSubmit,
+  onSignOut,
+  onProfileSave,
+  onAvatarChange,
 }: {
   generatedCount: number;
   publishCount: number;
+  storageMode: PersistenceMode;
+  authReady: boolean;
+  session: Session | null;
+  profile?: UserProfile;
+  authMode: "sign-in" | "sign-up";
+  authEmail: string;
+  authPassword: string;
+  profileNickname: string;
+  authNotice: string;
+  isAuthenticating: boolean;
+  isUploadingAvatar: boolean;
+  onAuthModeChange: (mode: "sign-in" | "sign-up") => void;
+  onAuthEmailChange: (value: string) => void;
+  onAuthPasswordChange: (value: string) => void;
+  onProfileNicknameChange: (value: string) => void;
+  onAuthSubmit: () => void;
+  onSignOut: () => void;
+  onProfileSave: () => void;
+  onAvatarChange: (file?: File) => void;
 }) {
+  const email = session?.user.email ?? profile?.email ?? "";
+
   return (
     <section className="page-grid profile-page">
       <article className="page-card profile-card">
         <div className="profile-hero">
-          <span className="profile-avatar">CS</span>
+          <span className="profile-avatar">
+            {profile?.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : getInitials(profile?.nickname ?? email)}
+          </span>
           <div>
             <p className="eyebrow">Personal Center</p>
             <h2>个人中心</h2>
-            <p>这里先预留用户头像、昵称、账号设置和团队入口，第四次迭代接登录后直接替换为真实用户数据。</p>
+            <p>
+              {session
+                ? "这里已经接入 Supabase 登录、个人资料和头像上传，保存的内容只归当前账号。"
+                : "请登录或注册账号。登录后可以上传头像，并把内容方案保存到自己的历史记录里。"}
+            </p>
           </div>
         </div>
 
         <div className="profile-metrics">
           <span>生成版本 <strong>{generatedCount}</strong></span>
           <span>发布记录 <strong>{publishCount}</strong></span>
-          <span>账号状态 <strong>演示用户</strong></span>
+          <span>账号状态 <strong>{session ? "已登录" : "未登录"}</strong></span>
         </div>
       </article>
 
       <aside className="page-card side-card">
         <div className="panel-heading compact">
           <Settings size={19} />
-          <h2>后续可接能力</h2>
+          <h2>{session ? "账号资料" : "登录 / 注册"}</h2>
         </div>
-        <div className="api-list">
-          <span>头像上传</span>
-          <span>账号资料编辑</span>
-          <span>平台授权管理</span>
-          <span>团队成员和角色</span>
+        {!authReady ? (
+          <div className="notice error">
+            <AlertCircle size={18} />
+            当前没有配置 Supabase 环境变量，真实登录和头像上传暂不可用。
+          </div>
+        ) : null}
+
+        {session ? (
+          <div className="account-panel">
+            <div className="account-row">
+              <span>邮箱</span>
+              <strong>{email}</strong>
+            </div>
+            <label className="field">
+              <span>昵称</span>
+              <input value={profileNickname} onChange={(event) => onProfileNicknameChange(event.target.value)} />
+            </label>
+            <label className="upload-field">
+              <UploadCloud size={17} />
+              {isUploadingAvatar ? "上传中..." : "上传或替换头像"}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={(event) => onAvatarChange(event.target.files?.[0])}
+                disabled={isUploadingAvatar}
+              />
+            </label>
+            <div className="button-row profile-actions">
+              <button className="secondary-action" type="button" onClick={onProfileSave} disabled={isAuthenticating}>
+                {isAuthenticating ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+                保存资料
+              </button>
+              <button className="ghost-action" type="button" onClick={onSignOut} disabled={isAuthenticating}>
+                退出登录
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="account-panel">
+            <div className="auth-tabs" role="tablist" aria-label="登录方式">
+              <button type="button" className={authMode === "sign-in" ? "active" : ""} onClick={() => onAuthModeChange("sign-in")}>
+                登录
+              </button>
+              <button type="button" className={authMode === "sign-up" ? "active" : ""} onClick={() => onAuthModeChange("sign-up")}>
+                注册
+              </button>
+            </div>
+            <label className="field">
+              <span>邮箱</span>
+              <input value={authEmail} onChange={(event) => onAuthEmailChange(event.target.value)} placeholder="name@example.com" />
+            </label>
+            <label className="field">
+              <span>密码</span>
+              <input
+                type="password"
+                value={authPassword}
+                onChange={(event) => onAuthPasswordChange(event.target.value)}
+                placeholder="至少 6 位"
+              />
+            </label>
+            {authMode === "sign-up" ? (
+              <label className="field">
+                <span>昵称</span>
+                <input value={profileNickname} onChange={(event) => onProfileNicknameChange(event.target.value)} />
+              </label>
+            ) : null}
+            <button className="primary-action" type="button" onClick={onAuthSubmit} disabled={isAuthenticating || !authReady}>
+              {isAuthenticating ? <Loader2 className="spin" size={18} /> : <KeyRound size={18} />}
+              {authMode === "sign-in" ? "登录账号" : "注册账号"}
+            </button>
+          </div>
+        )}
+
+        {authNotice ? <p className="save-note">{authNotice}</p> : null}
+        <div className="api-list account-hints">
+          <span>保存方式：{storageModeLabel[storageMode]}</span>
+          <span>头像存储：Supabase Storage avatars bucket</span>
+          <span>数据隔离：只读取当前登录用户的内容记录</span>
         </div>
       </aside>
     </section>
