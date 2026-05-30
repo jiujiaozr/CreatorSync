@@ -4,11 +4,11 @@
 
 ## 当前版本
 
-第四次迭代重点做真实账号和数据保存。真实平台发布和真实 AI 仍不接入，但用户可以用 Supabase 邮箱密码登录、上传头像，并把内容方案保存到当前账号下。
+第五次迭代重点接入 DeepSeek 真实 AI。真实 AI Key 不放在前端代码里，而是通过 Vercel Serverless 后端代理调用；用户仍然可以切回 Mock AI，保证演示稳定。
 
 - 原始标题、正文、内容类型、目标受众、生成偏好输入
 - 公众号、知乎、B站、小红书平台选择
-- Mock AI 生成平台文案
+- Mock AI 或 DeepSeek 真实 AI 生成平台文案
 - 每个平台生成结果可编辑
 - 不同平台预览样式不同
 - 一键模拟发布，展示发布中和成功状态
@@ -16,6 +16,7 @@
 - 登录后上传或替换头像
 - 登录后保存内容方案、平台草稿和模拟发布记录
 - 刷新页面后从当前账号的历史内容重新打开保存方案
+- DeepSeek 调用失败时给出提示，并允许回退到 Mock AI
 - 平台适配器结构，方便后续扩展抖音、视频号、微博
 
 ## 本地运行
@@ -39,16 +40,29 @@ npm run preview:local
 VITE_BASE_PATH=/
 VITE_SUPABASE_URL=你的 Supabase Project URL
 VITE_SUPABASE_ANON_KEY=你的 Supabase anon public key
+VITE_AI_API_BASE_URL=你的 Vercel 后端地址，例如 https://creatorsync-ai.vercel.app
 ```
 
-如果没有配置这两个变量，项目会自动退回到浏览器本地保存。这样做的好处是：没有数据库时也能演示保存和打开历史内容；配置 Supabase 后，同一套界面会启用真实登录、头像上传和当前用户的数据隔离。
+如果没有配置 Supabase 的两个变量，项目会自动退回到浏览器本地保存。这样做的好处是：没有数据库时也能演示保存和打开历史内容；配置 Supabase 后，同一套界面会启用真实登录、头像上传和当前用户的数据隔离。
+
+如果没有配置 `VITE_AI_API_BASE_URL`，Mock AI 仍然可以正常生成；选择 DeepSeek 时，页面会提示先配置真实 AI 后端。
+
+DeepSeek 的真实 API Key 只放在 Vercel 后端环境变量里：
+
+```bash
+DEEPSEEK_API_KEY=你的 DeepSeek API Key
+DEEPSEEK_MODEL=deepseek-chat
+```
+
+`DEEPSEEK_MODEL` 可以不填，默认使用 `deepseek-chat`。注意：不要把 `DEEPSEEK_API_KEY` 写入 `.env.local`、前端代码或 GitHub Pages 构建变量，因为浏览器产物会被用户看到。
 
 GitHub Pages 上线时，还需要在 GitHub 仓库的 `Settings -> Secrets and variables -> Actions` 中添加同名 Secrets：
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
+- `VITE_AI_API_BASE_URL`
 
-GitHub Actions 构建时会读取这两个 Secrets，并把它们打进前端产物里。线上部署还会设置 `VITE_BASE_PATH=/CreatorSync/`，保证 GitHub Pages 的子路径可以正确加载资源。
+GitHub Actions 构建时会读取这些前端变量，并把它们打进前端产物里。线上部署还会设置 `VITE_BASE_PATH=/CreatorSync/`，保证 GitHub Pages 的子路径可以正确加载资源。
 
 构建检查：
 
@@ -67,11 +81,13 @@ npm run build
 - `typescript`：代码类型检查。
 - `lucide-react`：页面里的图标。
 - `@supabase/supabase-js`：第四次迭代用于连接 Supabase Auth、Storage 和数据库。
+- Vercel Serverless：第五次迭代用于部署 DeepSeek 后端代理，不新增前端 npm 依赖。
 
 原创功能部分：
 
 - 多平台内容适配规则、平台专属字段和字段校验逻辑。
 - Mock AI 生成流程。
+- DeepSeek 真实 AI 生成代理、前端模式切换和失败回退流程。
 - 平台预览、编辑、模拟发布、发布失败重试和发布记录。
 - 第四次迭代的真实账号和数据保存流程：邮箱密码登录、头像上传、保存当前内容方案、读取当前账号历史内容、重新打开草稿、持久化模拟发布记录，并在 Supabase 未配置时提供本地保存兜底。
 - 真实能力预研区和迭代规划说明。
@@ -80,10 +96,11 @@ npm run build
 
 1. 输入原始内容。
 2. 选择目标平台。
-3. 点击“生成平台内容”。
-4. 查看并编辑各平台版本。
-5. 在右侧查看平台预览。
-6. 点击“模拟发布”查看发布结果。
+3. 选择 Mock AI 或 DeepSeek 生成模式。
+4. 点击生成按钮。
+5. 查看并编辑各平台版本。
+6. 在右侧查看平台预览。
+7. 点击“模拟发布”查看发布结果。
 
 ## 平台适配架构
 
@@ -180,6 +197,10 @@ https://jiujiaozr.github.io/CreatorSync/
 2. 第二版：预研真实 AI、真实平台授权和发布接口。
 3. 第三版：免费上线展示，让别人能通过公开网址访问。
 4. 第四版：增加后端和数据库，让内容不丢、接口更安全、发布过程可追踪。
+5. 第五版：接入 DeepSeek 真实 AI，通过后端代理保护密钥，并保留 Mock AI 兜底。
+6. 第六版：梳理真实平台接入限制，提供半自动发布清单和发布前检查。
+7. 第七版：选择一个平台先打通真实 API 或真实草稿同步小闭环。
+8. 第八版：把真实或半自动发布能力扩展到更多平台。
 
 ## PR 提交说明
 
@@ -281,82 +302,29 @@ Supabase 配置方式：
 - 不做复杂团队协作审批。
 - 不做计费系统。
 
-## 第四到第八次迭代路线
+## 第五次迭代实现说明
 
-后续迭代会继续保持“小步上线、每次只做一个主要能力”的节奏，避免一次性把范围做得太大。
+本次第五次迭代按“DeepSeek 真实 AI 生成版”落地，重点解决“真实 AI 可以生成，但密钥不暴露在前端”的问题。
 
-### 第四次迭代：Supabase 登录与数据保存版
+已增加内容：
 
-目标是让用户可以登录、有头像，并让内容和发布记录不再只存在当前页面里。前端继续使用 GitHub Pages，登录、头像和数据保存使用 Supabase 免费版。
+- 新增 Vercel Serverless 接口 `api/generate.js`，由后端读取 `DEEPSEEK_API_KEY` 并调用 DeepSeek。
+- 工作台新增生成模式切换：`Mock AI` 和 `DeepSeek`。
+- 前端通过 `VITE_AI_API_BASE_URL` 调用真实 AI 后端，生成结果继续复用现有平台草稿结构。
+- DeepSeek 调用失败、后端未配置或返回格式异常时，页面会展示可理解提示，并允许改用 Mock AI。
+- 真实 AI 生成后的草稿仍然可以编辑、预览、保存到历史记录，并参与模拟发布流程。
 
-计划新增：
+Vercel 后端配置方式：
 
-- 保存当前内容方案。
-- 保存各平台生成草稿。
-- 保存模拟发布记录。
-- 刷新页面后可以重新打开历史内容。
-- README 补充 Supabase 环境变量、登录、头像上传和数据表结构。
+1. 将当前仓库导入 Vercel。
+2. 在 Vercel 项目的 Environment Variables 中添加 `DEEPSEEK_API_KEY`。
+3. 可选添加 `DEEPSEEK_MODEL`，不填时默认使用 `deepseek-chat`。
+4. 部署后，把 Vercel 域名填入前端环境变量 `VITE_AI_API_BASE_URL`。
+5. GitHub Pages 线上构建时，在 GitHub Actions Secrets 中添加 `VITE_AI_API_BASE_URL`。
 
-建议数据表：
+安全边界：
 
-- `profiles`：保存用户昵称和头像地址。
-- `content_records`：保存一次内容生成任务，并归属到当前用户。
-- `platform_drafts`：保存每个平台的草稿。
-- `publish_records`：保存发布状态、失败原因、重试次数和时间。
-
-### 第五次迭代：DeepSeek 真实 AI 生成版
-
-第五次迭代暂定接入 DeepSeek 模型。真实 AI Key 不能放在前端代码里，所以需要一个很薄的后端接口来代替前端调用模型。
-
-计划新增：
-
-- 后端接口负责保存 DeepSeek API Key 并调用模型。
-- 前端支持 Mock AI 和真实 AI 切换。
-- DeepSeek 输出继续转成现有平台草稿结构。
-- AI 调用失败时，可以回退到 Mock AI，保证演示稳定。
-
-推荐部署：
-
-- 前端：继续使用 GitHub Pages。
-- 后端：优先考虑 Vercel Serverless 或 Cloudflare Workers 的免费额度。
-- 数据：继续使用 Supabase。
-
-### 第六次迭代：真实平台接入预研与半自动发布
-
-真实平台发布比 AI 接入更复杂，建议放到第六次迭代先做预研和半自动发布。
-
-计划新增：
-
-- 展示每个平台的授权状态、所需权限和接入限制。
-- 增强发布前校验，例如标题长度、标签数量、正文长度和封面标题。
-- 提供复制内容、打开目标平台发布入口、生成发布清单等半自动能力。
-- 说明下一步优先接哪个真实平台，以及选择原因。
-
-本次不急着做：
-
-- 不一次性接入公众号、知乎、B站、小红书全部真实发布。
-- 不保存平台账号密码。
-- 不绕过平台审核和权限规则。
-
-### 第七次迭代：单平台真实 API 小闭环
-
-第七次迭代选择一个最容易落地的平台，先完成一个真实 API 小闭环。可以是真实发布，也可以先是真实草稿同步。
-
-计划新增：
-
-- 选择一个平台作为真实接入试点。
-- 完成 OAuth 授权或平台要求的接入方式。
-- 支持真实草稿同步或真实发布。
-- 将真实发布结果保存到 `publish_records`。
-
-### 第八次迭代：多平台真实发布扩展
-
-第八次迭代再把真实接入能力扩展到更多平台。
-
-计划新增：
-
-- 统一授权状态、发布任务、失败重试和记录查询结构。
-- 增加第二个平台或更多平台的真实/半自动发布能力。
-- 保持平台 adapter 独立，新增平台时不重写主工作台流程。
-
-这条路线的重点是：第四次先让内容可保存，第五次让 AI 真实可用，第六次把真实平台限制讲清楚，第七次先打通一个平台，第八次再扩展到多平台。
+- `DEEPSEEK_API_KEY` 只放在 Vercel 后端环境变量中。
+- `VITE_AI_API_BASE_URL` 只是后端接口地址，可以进入前端构建产物。
+- 前端不会直接请求 DeepSeek 官方接口，也不会保存真实 AI Key。
+- 本次不做 AI 额度统计、计费、团队审批或真实平台发布 API。

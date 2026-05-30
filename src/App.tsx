@@ -45,7 +45,11 @@ import {
   uploadAvatar,
   upsertProfile,
 } from "./services/auth";
-import { mockGenerationProvider } from "./services/contentGeneration";
+import {
+  isRealApiGenerationConfigured,
+  mockGenerationProvider,
+  realApiGenerationProvider,
+} from "./services/contentGeneration";
 import { simulatePublish } from "./services/publish";
 import { getContentRecord, getPersistenceMode, listContentRecords, saveContentRecord } from "./services/recordStorage";
 import type {
@@ -67,6 +71,12 @@ import type {
 const contentTypes: ContentType[] = ["知识分享", "产品介绍", "活动宣传", "经验复盘"];
 const preferences: TonePreference[] = ["平衡清晰", "更正式", "更口语", "更有传播感"];
 type AppView = "workspace" | "records" | "integrations" | "profile";
+type GenerationMode = "mock" | "deepseek";
+
+const generationModeLabel: Record<GenerationMode, string> = {
+  mock: "Mock AI",
+  deepseek: "DeepSeek",
+};
 
 const navItems: Array<{ id: AppView; label: string; icon: typeof Home }> = [
   { id: "workspace", label: "工作台", icon: Home },
@@ -251,7 +261,9 @@ function App() {
   const [authNotice, setAuthNotice] = useState("");
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [generationMode, setGenerationMode] = useState<GenerationMode>("mock");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [canFallbackToMock, setCanFallbackToMock] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
   const [error, setError] = useState("");
@@ -346,7 +358,7 @@ function App() {
     });
   };
 
-  const generateDrafts = async () => {
+  const generateDrafts = async (modeOverride?: GenerationMode) => {
     if (!source.title.trim()) {
       setError("请先填写原始标题。");
       return;
@@ -362,11 +374,19 @@ function App() {
       return;
     }
 
+    const activeGenerationMode = modeOverride ?? generationMode;
+    const provider = activeGenerationMode === "deepseek" ? realApiGenerationProvider : mockGenerationProvider;
+
+    if (modeOverride) {
+      setGenerationMode(modeOverride);
+    }
+
     setError("");
+    setCanFallbackToMock(false);
     setIsGenerating(true);
 
     try {
-      const nextDrafts = await mockGenerationProvider.generateDrafts(source, selectedPlatforms);
+      const nextDrafts = await provider.generateDrafts(source, selectedPlatforms);
       setDrafts((current) => {
         const merged = { ...current };
         nextDrafts.forEach((draft) => {
@@ -385,9 +405,10 @@ function App() {
       setPublishAttempts([]);
       setRetryCounts(createEmptyRetryCounts());
       setActiveRecordId(undefined);
-      setSaveNotice("已生成新的平台草稿，保存后刷新页面也能重新打开。");
+      setSaveNotice(`已使用${generationModeLabel[activeGenerationMode]}生成新的平台草稿，保存后刷新页面也能重新打开。`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "生成失败，请稍后重试。");
+      setCanFallbackToMock(activeGenerationMode === "deepseek");
     } finally {
       setIsGenerating(false);
     }
@@ -699,9 +720,9 @@ function App() {
         <div className="brand-lockup" aria-label="CreatorSync 内容开发助手">
           <LogoMark />
           <div>
-            <p className="eyebrow">CreatorSync V4</p>
+            <p className="eyebrow">CreatorSync V5</p>
             <h1>内容开发助手</h1>
-            <p className="topbar-copy">真实登录与头像上传版，内容方案会保存到当前账号下。</p>
+            <p className="topbar-copy">真实 AI 生成版，支持 DeepSeek 和 Mock AI 双模式。</p>
           </div>
         </div>
 
@@ -724,7 +745,7 @@ function App() {
 
         <div className="user-area">
           <div className="status-strip" aria-label="项目状态">
-            <span><CheckCircle2 size={16} /> Mock AI</span>
+            <span><CheckCircle2 size={16} /> {generationModeLabel[generationMode]}</span>
             <span><ShieldCheck size={16} /> {session ? "已登录" : "未登录"}</span>
           </div>
           <button className="avatar-button" type="button" onClick={() => setActiveView("profile")} aria-label="进入个人中心">
@@ -805,6 +826,26 @@ function App() {
             />
           </label>
 
+          <div className="ai-mode-toggle" role="group" aria-label="生成模式">
+            <button
+              className={generationMode === "mock" ? "active" : ""}
+              type="button"
+              onClick={() => setGenerationMode("mock")}
+            >
+              <Bot size={16} />
+              Mock AI
+            </button>
+            <button
+              className={generationMode === "deepseek" ? "active" : ""}
+              type="button"
+              onClick={() => setGenerationMode("deepseek")}
+              title={isRealApiGenerationConfigured() ? "使用 DeepSeek 真实 AI" : "需要配置 VITE_AI_API_BASE_URL"}
+            >
+              <Sparkles size={16} />
+              DeepSeek
+            </button>
+          </div>
+
           <div className="platform-grid" aria-label="选择平台">
             {platformAdapters.map((adapter) => {
               const checked = selectedPlatforms.includes(adapter.id);
@@ -830,7 +871,12 @@ function App() {
           {error ? (
             <div className="notice error" role="alert">
               <AlertCircle size={18} />
-              {error}
+              <span>{error}</span>
+              {canFallbackToMock ? (
+                <button className="inline-action" type="button" onClick={() => void generateDrafts("mock")} disabled={isGenerating}>
+                  改用 Mock AI
+                </button>
+              ) : null}
             </div>
           ) : null}
 
@@ -846,9 +892,9 @@ function App() {
           </div>
           {saveNotice ? <p className="save-note">{saveNotice}</p> : null}
 
-          <button className="primary-action" type="button" onClick={generateDrafts} disabled={!canGenerate || isGenerating}>
+          <button className="primary-action" type="button" onClick={() => void generateDrafts()} disabled={!canGenerate || isGenerating}>
             {isGenerating ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />}
-            {isGenerating ? "生成中" : "生成平台内容"}
+            {isGenerating ? "生成中" : `用${generationModeLabel[generationMode]}生成`}
           </button>
         </aside>
 
