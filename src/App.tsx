@@ -4,8 +4,11 @@ import {
   Bot,
   Check,
   CheckCircle2,
+  ClipboardList,
   Clock3,
+  Copy,
   Database,
+  ExternalLink,
   FileText,
   History,
   Home,
@@ -57,7 +60,9 @@ import type {
   IntegrationCapability,
   PersistenceMode,
   PlatformDraft,
+  PlatformIntegrationProfile,
   PlatformId,
+  PublishChecklistItem,
   PublishAttempt,
   PublishResult,
   PublishState,
@@ -115,7 +120,7 @@ const integrationCapabilities: IntegrationCapability[] = [
     title: "真实发布 API",
     owner: "后端",
     status: "存在限制",
-    description: "真实发布会受到平台审核、字段格式、频率限制影响，第二次迭代先展示检查和重试流程。",
+    description: "真实发布会受到平台审核、字段格式、频率限制影响，第六次迭代先展示限制、清单和人工发布流程。",
   },
   {
     id: "frontend-state",
@@ -123,6 +128,49 @@ const integrationCapabilities: IntegrationCapability[] = [
     owner: "前端",
     status: "已预留",
     description: "内容输入、平台适配预览、字段检查和模拟发布状态仍可在前端完成，适合作品演示。",
+  },
+];
+
+const platformIntegrationProfiles: PlatformIntegrationProfile[] = [
+  {
+    platformId: "wechat",
+    platformName: "微信公众号",
+    authStatus: "适合后续试点",
+    requiredPermissions: ["公众号主体", "AppID / AppSecret", "草稿箱接口", "素材上传"],
+    apiDifficulty: "中",
+    limitations: ["需要后端保管密钥", "图片素材要先上传", "正式群发仍受平台审核和频率限制"],
+    publishEntryUrl: "https://mp.weixin.qq.com/",
+    nextStep: "第七次迭代优先尝试草稿箱同步，不直接做群发。",
+  },
+  {
+    platformId: "zhihu",
+    platformName: "知乎",
+    authStatus: "未授权",
+    requiredPermissions: ["开放平台应用", "账号授权", "内容写入权限"],
+    apiDifficulty: "高",
+    limitations: ["公开平台更偏数据读取", "内容写入能力需要单独确认", "不适合作为第一个真实发布试点"],
+    publishEntryUrl: "https://www.zhihu.com/",
+    nextStep: "先保留半自动复制发布，等写入接口和审核要求更明确后再接入。",
+  },
+  {
+    platformId: "bilibili",
+    platformName: "B站",
+    authStatus: "需要企业/创作者认证",
+    requiredPermissions: ["开放平台账号", "应用身份认证", "稿件或专栏发布权限", "视频素材管理"],
+    apiDifficulty: "中",
+    limitations: ["视频投稿需要素材、分区、封面等更多字段", "应用审核和账号身份会影响接入速度"],
+    publishEntryUrl: "https://member.bilibili.com/platform/upload/video/frame",
+    nextStep: "当前先导出标题、简介、分区和脚本摘要，后续可评估专栏或视频稿件小闭环。",
+  },
+  {
+    platformId: "xiaohongshu",
+    platformName: "小红书",
+    authStatus: "未授权",
+    requiredPermissions: ["开放平台应用", "创作者或商家身份", "笔记发布权限", "封面和话题规则"],
+    apiDifficulty: "高",
+    limitations: ["公开能力更偏商家和电商场景", "笔记发布权限、风控和审核要求较重"],
+    publishEntryUrl: "https://creator.xiaohongshu.com/",
+    nextStep: "继续使用人工复制发布，重点检查封面标题、开头钩子和标签数量。",
   },
 ];
 
@@ -237,6 +285,86 @@ const buildPublishSnapshot = (attempts: PublishAttempt[]) => {
   return { results, retries };
 };
 
+const formatDraftForCopy = (draft: PlatformDraft) => {
+  const metaRows = Object.entries(draft.meta)
+    .filter(([, value]) => value.trim())
+    .map(([key, value]) => `${key}：${value}`)
+    .join("\n");
+
+  return [
+    `平台：${draft.platformName}`,
+    `标题：${draft.title}`,
+    draft.subtitle ? `摘要 / 简介：${draft.subtitle}` : "",
+    "",
+    "正文：",
+    draft.body,
+    "",
+    `标签：${draft.tags.map((tag) => (draft.platformId === "xiaohongshu" ? `#${tag}` : tag)).join(" ")}`,
+    metaRows ? `\n平台专属字段：\n${metaRows}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
+const copyTextToClipboard = async (text: string) => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+
+  if (!copied) {
+    throw new Error("copy failed");
+  }
+};
+
+const buildPublishChecklist = (drafts: PlatformDraft[], issues: ValidationIssue[]): PublishChecklistItem[] =>
+  drafts.flatMap((draft) => {
+    const profileItem = platformIntegrationProfiles.find((item) => item.platformId === draft.platformId);
+    const issueList = issues.filter((issue) => issue.platformId === draft.platformId);
+    const items: PublishChecklistItem[] = [
+      {
+        platformId: draft.platformId,
+        platformName: draft.platformName,
+        label: "字段检查",
+        status: issueList.length === 0 ? "通过" : "待处理",
+        detail: issueList.length === 0 ? "标题、正文、标签和平台专属字段都已满足当前检查规则。" : issueList.map((issue) => issue.message).join("；"),
+      },
+      {
+        platformId: draft.platformId,
+        platformName: draft.platformName,
+        label: "复制内容",
+        status: "待处理",
+        detail: `点击“复制发布内容”，再粘贴到${draft.platformName}后台。`,
+      },
+      {
+        platformId: draft.platformId,
+        platformName: draft.platformName,
+        label: "打开发布入口",
+        status: "待处理",
+        detail: profileItem ? `打开 ${profileItem.publishEntryUrl} 后，用平台账号完成登录和人工发布。` : "打开平台后台后，人工粘贴内容并检查预览。",
+      },
+      {
+        platformId: draft.platformId,
+        platformName: draft.platformName,
+        label: "真实限制确认",
+        status: "待处理",
+        detail: profileItem ? profileItem.limitations.join("；") : "发布前仍需确认平台审核、频率和账号权限。",
+      },
+    ];
+
+    return items;
+  });
+
 function App() {
   const [activeView, setActiveView] = useState<AppView>("workspace");
   const [source, setSource] = useState<SourceContent>(defaultSource);
@@ -266,6 +394,8 @@ function App() {
   const [canFallbackToMock, setCanFallbackToMock] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
+  const [copyNotice, setCopyNotice] = useState("");
+  const [showPublishChecklist, setShowPublishChecklist] = useState(false);
   const [error, setError] = useState("");
 
   const generatedDrafts = useMemo(
@@ -274,6 +404,10 @@ function App() {
   );
   const activeDraft = drafts[activePlatform];
   const validationIssues = useMemo(() => getValidationIssues(generatedDrafts), [generatedDrafts]);
+  const publishChecklist = useMemo(
+    () => buildPublishChecklist(generatedDrafts, validationIssues),
+    [generatedDrafts, validationIssues],
+  );
   const activeIssues = activeDraft
     ? validationIssues.filter((issue) => issue.platformId === activeDraft.platformId)
     : validationIssues;
@@ -714,15 +848,41 @@ function App() {
     }
   };
 
+  const copyActiveDraft = async () => {
+    if (!activeDraft) {
+      setCopyNotice("请先生成一个平台版本，再复制发布内容。");
+      return;
+    }
+
+    try {
+      await copyTextToClipboard(formatDraftForCopy(activeDraft));
+      setCopyNotice(`已复制${activeDraft.platformName}发布内容，可以粘贴到平台后台。`);
+    } catch {
+      setCopyNotice("复制失败，请手动选中文本复制。");
+    }
+  };
+
+  const openActivePublishEntry = () => {
+    if (!activeDraft) {
+      setCopyNotice("请先选择一个平台版本。");
+      return;
+    }
+
+    const profileItem = platformIntegrationProfiles.find((item) => item.platformId === activeDraft.platformId);
+    if (profileItem) {
+      window.open(profileItem.publishEntryUrl, "_blank", "noopener,noreferrer");
+    }
+  };
+
   return (
     <main className="app-shell">
       <header className="topbar">
         <div className="brand-lockup" aria-label="CreatorSync 内容开发助手">
           <LogoMark />
           <div>
-            <p className="eyebrow">CreatorSync V5</p>
+            <p className="eyebrow">CreatorSync V6</p>
             <h1>内容开发助手</h1>
-            <p className="topbar-copy">真实 AI 生成版，支持 DeepSeek 和 Mock AI 双模式。</p>
+            <p className="topbar-copy">半自动发布清单版，支持 DeepSeek 和 Mock AI 双模式。</p>
           </div>
         </div>
 
@@ -948,6 +1108,16 @@ function App() {
 
           {activeDraft ? <PlatformPreview draft={activeDraft} /> : <PreviewPlaceholder />}
 
+          <SemiAutoPublishPanel
+            activeDraft={activeDraft}
+            checklist={publishChecklist}
+            copyNotice={copyNotice}
+            showChecklist={showPublishChecklist}
+            onCopy={copyActiveDraft}
+            onOpenEntry={openActivePublishEntry}
+            onToggleChecklist={() => setShowPublishChecklist((current) => !current)}
+          />
+
           <div className="publish-box">
             <div className="publish-head">
               <h3>发布状态</h3>
@@ -996,7 +1166,7 @@ function App() {
       ) : null}
 
       {activeView === "integrations" ? (
-        <IntegrationPage capabilities={integrationCapabilities} />
+        <IntegrationPage capabilities={integrationCapabilities} profiles={platformIntegrationProfiles} />
       ) : null}
 
       {activeView === "profile" ? (
@@ -1162,36 +1332,39 @@ function RecordsPage({
   );
 }
 
-function IntegrationPage({ capabilities }: { capabilities: IntegrationCapability[] }) {
-  const suggestions = [
-    "增加草稿保存状态：已保存、未保存、保存失败，让用户知道刷新前是否安全。",
-    "增加发布前风险提示：比如敏感词、封面缺失、标题过长，能更像真实发布工具。",
-    "增加平台授权清单：每个平台显示授权状态、有效期和需要的权限。",
-    "增加演示数据入口：一键填入高质量样例，面试展示时更稳定。",
-  ];
-
+function IntegrationPage({
+  capabilities,
+  profiles,
+}: {
+  capabilities: IntegrationCapability[];
+  profiles: PlatformIntegrationProfile[];
+}) {
   return (
     <section className="page-grid">
       <article className="page-card">
         <div className="page-heading">
           <div>
             <p className="eyebrow">Integration Research</p>
-            <h2>接入预研</h2>
+            <h2>真实平台接入预研</h2>
           </div>
-          <span className="page-badge">不接真实接口，先讲清边界</span>
+          <span className="page-badge">先讲清边界，再做真实接入</span>
         </div>
         <IntegrationPanel capabilities={capabilities} />
+        <PlatformIntegrationTable profiles={profiles} />
       </article>
 
       <aside className="page-card side-card">
         <div className="panel-heading compact">
           <Lightbulb size={19} />
-          <h2>新增建议</h2>
+          <h2>第七次优先级</h2>
         </div>
-        <div className="suggestion-list">
-          {suggestions.map((item) => (
-            <p key={item}>{item}</p>
-          ))}
+        <div className="priority-note">
+          <strong>优先做微信公众号草稿箱同步</strong>
+          <p>当前产品以图文内容改写和多平台发布准备为主，公众号草稿箱更贴合已有标题、摘要、正文和标签结构。</p>
+          <p>B站更适合视频投稿，小红书和知乎的公开能力限制更多，所以先保留半自动发布。</p>
+          <a href="https://developers.weixin.qq.com/doc/offiaccount/Draft_Box/Add_draft.html" target="_blank" rel="noreferrer">
+            查看公众号草稿箱文档 <ExternalLink size={14} />
+          </a>
         </div>
       </aside>
     </section>
@@ -1420,6 +1593,24 @@ function getValidationIssues(drafts: PlatformDraft[]): ValidationIssue[] {
   return drafts.flatMap((draft) => {
     const adapter = adapterById[draft.platformId];
     const issues: ValidationIssue[] = [];
+    const titleLimit: Record<PlatformId, number> = {
+      wechat: 64,
+      zhihu: 80,
+      bilibili: 80,
+      xiaohongshu: 32,
+    };
+    const tagLimit: Record<PlatformId, number> = {
+      wechat: 5,
+      zhihu: 5,
+      bilibili: 10,
+      xiaohongshu: 10,
+    };
+    const bodyLimit: Record<PlatformId, number> = {
+      wechat: 5000,
+      zhihu: 5000,
+      bilibili: 1200,
+      xiaohongshu: 1000,
+    };
 
     if (!draft.title.trim()) {
       issues.push({
@@ -1427,6 +1618,13 @@ function getValidationIssues(drafts: PlatformDraft[]): ValidationIssue[] {
         platformName: draft.platformName,
         field: "标题",
         message: "发布前需要有清楚的标题。",
+      });
+    } else if (draft.title.length > titleLimit[draft.platformId]) {
+      issues.push({
+        platformId: draft.platformId,
+        platformName: draft.platformName,
+        field: "标题长度",
+        message: `${adapter.shortName}标题建议控制在 ${titleLimit[draft.platformId]} 字以内，当前是 ${draft.title.length} 字。`,
       });
     }
 
@@ -1437,6 +1635,13 @@ function getValidationIssues(drafts: PlatformDraft[]): ValidationIssue[] {
         field: "正文",
         message: "正文不能为空，否则用户看不到完整内容。",
       });
+    } else if (draft.body.length > bodyLimit[draft.platformId]) {
+      issues.push({
+        platformId: draft.platformId,
+        platformName: draft.platformName,
+        field: "正文长度",
+        message: `${adapter.shortName}正文建议控制在 ${bodyLimit[draft.platformId]} 字以内，当前是 ${draft.body.length} 字。`,
+      });
     }
 
     if (draft.tags.length === 0) {
@@ -1445,6 +1650,13 @@ function getValidationIssues(drafts: PlatformDraft[]): ValidationIssue[] {
         platformName: draft.platformName,
         field: "标签",
         message: "至少保留一个标签，方便平台识别内容主题。",
+      });
+    } else if (draft.tags.length > tagLimit[draft.platformId]) {
+      issues.push({
+        platformId: draft.platformId,
+        platformName: draft.platformName,
+        field: "标签数量",
+        message: `${adapter.shortName}标签建议不超过 ${tagLimit[draft.platformId]} 个，当前是 ${draft.tags.length} 个。`,
       });
     }
 
@@ -1458,6 +1670,33 @@ function getValidationIssues(drafts: PlatformDraft[]): ValidationIssue[] {
         });
       }
     });
+
+    if (draft.platformId === "wechat" && (draft.meta.summary?.length ?? 0) > 120) {
+      issues.push({
+        platformId: draft.platformId,
+        platformName: draft.platformName,
+        field: "摘要长度",
+        message: "公众号摘要建议控制在 120 字以内，方便列表页展示。",
+      });
+    }
+
+    if (draft.platformId === "xiaohongshu" && (draft.meta.coverTitle?.length ?? 0) > 16) {
+      issues.push({
+        platformId: draft.platformId,
+        platformName: draft.platformName,
+        field: "封面标题",
+        message: "小红书封面标题建议控制在 16 字以内，避免封面上文字太挤。",
+      });
+    }
+
+    if (draft.platformId === "bilibili" && !draft.meta.scriptOutline?.includes("->")) {
+      issues.push({
+        platformId: draft.platformId,
+        platformName: draft.platformName,
+        field: "脚本摘要",
+        message: "B站脚本摘要建议保留分段结构，方便发布前检查视频内容顺序。",
+      });
+    }
 
     return issues;
   });
@@ -1513,6 +1752,123 @@ function IntegrationPanel({ capabilities }: { capabilities: IntegrationCapabilit
           );
         })}
       </div>
+    </section>
+  );
+}
+
+function PlatformIntegrationTable({ profiles }: { profiles: PlatformIntegrationProfile[] }) {
+  return (
+    <section className="platform-research" aria-label="平台接入限制">
+      <div className="panel-heading compact">
+        <PlugZap size={19} />
+        <h2>平台授权与限制</h2>
+      </div>
+      <div className="research-grid">
+        {profiles.map((profileItem) => {
+          const adapter = adapterById[profileItem.platformId];
+          return (
+            <article className="research-card" key={profileItem.platformId}>
+              <div className="research-card-head">
+                <span className="publish-platform" style={{ "--accent": adapter.accent } as CSSProperties}>
+                  {adapter.shortName}
+                </span>
+                <span>难度：{profileItem.apiDifficulty}</span>
+              </div>
+              <h3>{profileItem.platformName}</h3>
+              <p>{profileItem.authStatus}</p>
+              <div className="research-list">
+                <strong>所需权限</strong>
+                <span>{profileItem.requiredPermissions.join("、")}</span>
+              </div>
+              <div className="research-list">
+                <strong>主要限制</strong>
+                <span>{profileItem.limitations.join("；")}</span>
+              </div>
+              <div className="research-next">{profileItem.nextStep}</div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function SemiAutoPublishPanel({
+  activeDraft,
+  checklist,
+  copyNotice,
+  showChecklist,
+  onCopy,
+  onOpenEntry,
+  onToggleChecklist,
+}: {
+  activeDraft?: PlatformDraft;
+  checklist: PublishChecklistItem[];
+  copyNotice: string;
+  showChecklist: boolean;
+  onCopy: () => void;
+  onOpenEntry: () => void;
+  onToggleChecklist: () => void;
+}) {
+  const activeProfile = activeDraft
+    ? platformIntegrationProfiles.find((item) => item.platformId === activeDraft.platformId)
+    : undefined;
+  const activeChecklist = activeDraft
+    ? checklist.filter((item) => item.platformId === activeDraft.platformId)
+    : checklist;
+  const todoCount = activeChecklist.filter((item) => item.status === "待处理").length;
+
+  return (
+    <section className="semi-auto-panel" aria-label="半自动发布工具">
+      <div className="publish-head">
+        <h3>半自动发布</h3>
+        <span>{activeDraft ? activeDraft.platformName : "等待生成"}</span>
+      </div>
+      <p>
+        当前不会保存平台账号密码，也不会直接调用真实发布接口。这里先把可复制内容、发布入口和人工检查清单准备好。
+      </p>
+      <div className="semi-actions">
+        <button className="secondary-action" type="button" onClick={onCopy} disabled={!activeDraft}>
+          <Copy size={16} />
+          复制发布内容
+        </button>
+        <button className="ghost-action" type="button" onClick={onOpenEntry} disabled={!activeDraft}>
+          <ExternalLink size={16} />
+          打开发布入口
+        </button>
+        <button className="ghost-action" type="button" onClick={onToggleChecklist} disabled={checklist.length === 0}>
+          <ClipboardList size={16} />
+          {showChecklist ? "收起清单" : "生成清单"}
+        </button>
+      </div>
+      {copyNotice ? <p className="save-note">{copyNotice}</p> : null}
+      {activeProfile ? (
+        <div className="entry-note">
+          <strong>真实接入限制：</strong>
+          <span>{activeProfile.limitations.join("；")}</span>
+        </div>
+      ) : null}
+      {showChecklist ? (
+        <div className="checklist-panel">
+          <div className="checklist-summary">
+            <strong>发布前清单</strong>
+            <span>{todoCount > 0 ? `${todoCount} 项待处理` : "全部通过"}</span>
+          </div>
+          {activeChecklist.length === 0 ? (
+            <p className="history-empty">生成平台版本后，这里会列出可执行的人工发布步骤。</p>
+          ) : (
+            activeChecklist.map((item) => (
+              <article className={`checklist-item ${item.status === "通过" ? "passed" : "todo"}`} key={`${item.platformId}-${item.label}`}>
+                <span>{item.status}</span>
+                <div>
+                  <strong>{item.label}</strong>
+                  <p>{item.detail}</p>
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+      ) : null}
     </section>
   );
 }
