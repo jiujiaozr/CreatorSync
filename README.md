@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-第五次迭代重点接入 DeepSeek 真实 AI。真实 AI Key 不放在前端代码里，而是通过 Vercel Serverless 后端代理调用；用户仍然可以切回 Mock AI，保证演示稳定。
+第五次迭代重点接入 DeepSeek 真实 AI。真实 AI Key 不放在前端代码里，而是通过后端代理调用；用户仍然可以切回 Mock AI，保证演示稳定。
 
 - 原始标题、正文、内容类型、目标受众、生成偏好输入
 - 公众号、知乎、B站、小红书平台选择
@@ -40,14 +40,14 @@ npm run preview:local
 VITE_BASE_PATH=/
 VITE_SUPABASE_URL=你的 Supabase Project URL
 VITE_SUPABASE_ANON_KEY=你的 Supabase anon public key
-VITE_AI_API_BASE_URL=你的 Vercel 后端地址，例如 https://creatorsync-ai.vercel.app
+VITE_AI_API_BASE_URL=真实 AI 后端地址，例如 https://wrkwwckubkatqqzstwqy.supabase.co/functions/v1
 ```
 
 如果没有配置 Supabase 的两个变量，项目会自动退回到浏览器本地保存。这样做的好处是：没有数据库时也能演示保存和打开历史内容；配置 Supabase 后，同一套界面会启用真实登录、头像上传和当前用户的数据隔离。
 
 如果没有配置 `VITE_AI_API_BASE_URL`，Mock AI 仍然可以正常生成；选择 DeepSeek 时，页面会提示先配置真实 AI 后端。
 
-DeepSeek 的真实 API Key 只放在 Vercel 后端环境变量里：
+DeepSeek 的真实 API Key 只放在后端环境变量里：
 
 ```bash
 DEEPSEEK_API_KEY=你的 DeepSeek API Key
@@ -81,7 +81,7 @@ npm run build
 - `typescript`：代码类型检查。
 - `lucide-react`：页面里的图标。
 - `@supabase/supabase-js`：第四次迭代用于连接 Supabase Auth、Storage 和数据库。
-- Vercel Serverless：第五次迭代用于部署 DeepSeek 后端代理，不新增前端 npm 依赖。
+- Vercel Serverless / Supabase Edge Functions：第五次迭代用于部署 DeepSeek 后端代理，不新增前端 npm 依赖。
 
 原创功能部分：
 
@@ -308,13 +308,20 @@ Supabase 配置方式：
 
 已增加内容：
 
-- 新增 Vercel Serverless 接口 `api/generate.js`，由后端读取 `DEEPSEEK_API_KEY` 并调用 DeepSeek。
+- 新增后端代理接口，由后端读取 `DEEPSEEK_API_KEY` 并调用 DeepSeek。
 - 工作台新增生成模式切换：`Mock AI` 和 `DeepSeek`。
 - 前端通过 `VITE_AI_API_BASE_URL` 调用真实 AI 后端，生成结果继续复用现有平台草稿结构。
 - DeepSeek 调用失败、后端未配置或返回格式异常时，页面会展示可理解提示，并允许改用 Mock AI。
 - 真实 AI 生成后的草稿仍然可以编辑、预览、保存到历史记录，并参与模拟发布流程。
 
-Vercel 后端配置方式：
+Supabase Edge Function 配置方式：
+
+1. 在 Supabase 中为当前项目配置 Function Secret：`DEEPSEEK_API_KEY`。
+2. 部署 `supabase/functions/api/index.ts`，函数名为 `api`，并关闭 JWT 校验。
+3. 将 GitHub Actions Secret `VITE_AI_API_BASE_URL` 设置为 `https://wrkwwckubkatqqzstwqy.supabase.co/functions/v1`。
+4. 重新触发 GitHub Pages 部署后，线上前端会请求 `/api/generate`，完整地址是 `https://wrkwwckubkatqqzstwqy.supabase.co/functions/v1/api/generate`。
+
+Vercel 后端也可以继续使用：
 
 1. 将当前仓库导入 Vercel。
 2. 在 Vercel 项目的 Environment Variables 中添加 `DEEPSEEK_API_KEY`。
@@ -324,7 +331,7 @@ Vercel 后端配置方式：
 
 安全边界：
 
-- `DEEPSEEK_API_KEY` 只放在 Vercel 后端环境变量中。
+- `DEEPSEEK_API_KEY` 只放在 Vercel 或 Supabase Edge Function 的后端环境变量中。
 - `VITE_AI_API_BASE_URL` 只是后端接口地址，可以进入前端构建产物。
 - 前端不会直接请求 DeepSeek 官方接口，也不会保存真实 AI Key。
 - 本次不做 AI 额度统计、计费、团队审批或真实平台发布 API。
