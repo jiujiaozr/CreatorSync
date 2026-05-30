@@ -76,7 +76,7 @@ export const signUpWithEmail = async (email: string, password: string, nickname:
     throw error;
   }
 
-  if (data.user) {
+  if (data.user && data.session) {
     await upsertProfile(data.user.id, data.user.email ?? email, nickname);
   }
 

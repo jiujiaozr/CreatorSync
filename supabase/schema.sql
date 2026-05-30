@@ -46,6 +46,12 @@ create table if not exists public.publish_records (
   created_at text not null
 );
 
+grant usage on schema public to anon, authenticated;
+grant select, insert, update, delete on public.profiles to authenticated;
+grant select, insert, update, delete on public.content_records to authenticated;
+grant select, insert, update, delete on public.platform_drafts to authenticated;
+grant select, insert, update, delete on public.publish_records to authenticated;
+
 alter table public.profiles enable row level security;
 alter table public.content_records enable row level security;
 alter table public.platform_drafts enable row level security;
@@ -66,6 +72,33 @@ create policy "profiles are owned by users"
   on public.profiles for all
   using (auth.uid() = id)
   with check (auth.uid() = id);
+
+create or replace function public.handle_new_user_profile()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.profiles (id, email, nickname, updated_at)
+  values (
+    new.id,
+    coalesce(new.email, ''),
+    coalesce(new.raw_user_meta_data ->> 'nickname', split_part(coalesce(new.email, ''), '@', 1), '创作者'),
+    now()
+  )
+  on conflict (id) do update
+    set email = excluded.email,
+        nickname = excluded.nickname,
+        updated_at = now();
+
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created_profile on auth.users;
+create trigger on_auth_user_created_profile
+  after insert on auth.users
+  for each row execute function public.handle_new_user_profile();
 
 create policy "content records are owned by users"
   on public.content_records for all
