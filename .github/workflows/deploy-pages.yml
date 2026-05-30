@@ -37,6 +37,7 @@ jobs:
           VITE_BASE_PATH: /CreatorSync/
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://wrkwwckubkatqqzstwqy.supabase.co' }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'sb_publishable_7hz4s7f_bXzxqkStez5kjQ_tzcKLRV4' }}
+          VITE_AI_API_BASE_URL: ${{ secrets.VITE_AI_API_BASE_URL || '' }}
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
