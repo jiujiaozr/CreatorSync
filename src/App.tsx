@@ -352,7 +352,7 @@ function App() {
         <div className="brand-lockup" aria-label="CreatorSync 内容开发助手">
           <LogoMark />
           <div>
-            <p className="eyebrow">CreatorSync V2</p>
+            <p className="eyebrow">CreatorSync V3</p>
             <h1>内容开发助手</h1>
             <p className="topbar-copy">真实能力预研可视化版，不接真实接口也能讲清未来怎么落地。</p>
           </div>

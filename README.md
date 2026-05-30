@@ -99,6 +99,12 @@ type PlatformAdapter = {
 https://<github-username>.github.io/<repo-name>/
 ```
 
+本项目第三次迭代使用的线上地址：
+
+```text
+https://jiujiaozr.github.io/CreatorSync/
+```
+
 上线前检查清单：
 
 - `npm run build` 可以成功执行。
@@ -179,3 +185,37 @@ https://<github-username>.github.io/<repo-name>/
 - 不接入真实 AI API。
 - 不新增登录注册、数据库或后端服务。
 - 不保存刷新后的历史内容。
+
+## 第三次迭代实现说明
+
+本次第三次迭代以“免费上线展示”为第一优先级。仓库公开后，项目使用 GitHub Pages 自动部署，别人拿到下面这个地址就可以直接访问作品：
+
+```text
+https://jiujiaozr.github.io/CreatorSync/
+```
+
+部署方式：
+
+- 部署平台：GitHub Pages。
+- 触发方式：代码合并到 `main` 后，由 GitHub Actions 自动构建并发布。
+- 构建命令：`npm run build`。
+- 发布目录：`dist`。
+- Vite 生产资源路径：`/CreatorSync/`，用于避免 GitHub Pages 子路径部署后页面空白或样式丢失。
+
+上线前检查：
+
+- 本地先运行 `npm run build`，确认构建通过。
+- 本地走通主要流程：输入内容 -> 选择平台 -> 生成 -> 编辑 -> 预览 -> 模拟发布 -> 查看结果。
+- 仓库公开后，在 GitHub 仓库的 Pages 设置中选择 GitHub Actions 作为部署来源。
+- 部署成功后，用无登录或隐身窗口打开线上地址，确认普通访问者也能进入页面。
+- 如果页面刚发布后没有立即更新，可以等待几分钟后刷新；如果页面空白，优先检查 `vite.config.ts` 里的 `base` 是否仍为 `/CreatorSync/`。
+
+本次仍然不做：
+
+- 不新增数据库。
+- 不新增后端服务。
+- 不新增登录注册。
+- 不接入真实 AI API。
+- 不接入真实平台发布接口。
+
+界面上，本次只做简约大气风格的细节打磨：减少背景装饰感，统一卡片、按钮、表单和状态标签的视觉层级，让桌面端和移动端的演示流程更清楚。
