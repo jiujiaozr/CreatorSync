@@ -493,7 +493,7 @@ MVP 阶段建议用这些指标判断作品是否完成：
 推荐实现：
 
 - 前端继续部署在 GitHub Pages。
-- 后端可优先使用 Vercel Serverless 或 Cloudflare Workers 的免费额度。
+- 后端可优先使用 Vercel Serverless、Supabase Edge Functions 或 Cloudflare Workers 的免费额度。
 - DeepSeek API Key 放在后端环境变量中，不进入前端仓库。
 
 本次不做：
@@ -642,12 +642,12 @@ MVP 阶段建议用这些指标判断作品是否完成：
 
 已完成能力：
 
-- 新增 Vercel Serverless 接口 `api/generate.js`，由后端读取 `DEEPSEEK_API_KEY` 并调用 DeepSeek。
+- 新增后端代理接口，由后端读取 `DEEPSEEK_API_KEY` 并调用 DeepSeek。
 - 工作台新增生成模式切换：`Mock AI` 和 `DeepSeek`。
 - 前端通过 `VITE_AI_API_BASE_URL` 调用真实 AI 后端，生成结果继续复用现有平台草稿结构。
 - DeepSeek 调用失败、后端未配置或返回格式异常时，页面会展示可理解提示，并允许改用 Mock AI。
 - 真实 AI 生成后的草稿仍然可以编辑、预览、保存到历史记录，并参与模拟发布流程。
-- README 中补充 Vercel 后端环境变量、启动方式和安全边界。
+- README 中补充后端环境变量、启动方式和安全边界。
 
 本次不做范围：
 
