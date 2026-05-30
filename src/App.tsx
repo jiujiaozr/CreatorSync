@@ -173,6 +173,31 @@ const getInitials = (value?: string) => {
   return text.slice(0, 2).toUpperCase();
 };
 
+const getAuthErrorMessage = (caught: unknown, mode: "sign-in" | "sign-up") => {
+  const fallback = mode === "sign-in" ? "登录失败，请检查邮箱和密码。" : "注册失败，请检查邮箱、密码和 Supabase Auth 设置。";
+  const errorLike = caught as { message?: string; status?: number; code?: string };
+  const message = errorLike?.message ?? "";
+  const normalized = message.toLowerCase();
+
+  if (errorLike?.status === 429 || normalized.includes("rate limit") || normalized.includes("over_email_send_rate_limit")) {
+    return "注册请求被 Supabase 限流了。新项目默认邮件服务额度很低，请到 Supabase 的 Authentication -> Providers -> Email 里临时关闭 Confirm email，或稍后再试。";
+  }
+
+  if (normalized.includes("already registered") || normalized.includes("user already registered")) {
+    return "这个邮箱已经注册过了，请切换到登录，或者换一个邮箱注册。";
+  }
+
+  if (normalized.includes("password")) {
+    return "密码不符合 Supabase 要求，请换一个更强的密码，建议至少 8 位并包含大小写字母和数字。";
+  }
+
+  if (normalized.includes("email")) {
+    return "邮箱格式或邮箱验证设置有问题，请确认邮箱填写正确，并检查 Supabase 的 Email 登录设置。";
+  }
+
+  return message || fallback;
+};
+
 const buildDraftMap = (draftList: PlatformDraft[]) => {
   const next = createEmptyDraftMap();
   draftList.forEach((draft) => {
@@ -490,10 +515,16 @@ function App() {
       setSession(nextSession);
       await loadProfile(nextSession);
       await refreshSavedRecords(nextSession?.user.id);
-      setAuthNotice(authMode === "sign-in" ? "登录成功，已读取你的历史内容。" : "注册成功，已创建个人资料。");
+      setAuthNotice(
+        authMode === "sign-in"
+          ? "登录成功，已读取你的历史内容。"
+          : nextSession
+            ? "注册成功，已创建个人资料。"
+            : "注册请求已提交，请先到邮箱完成确认；如果只是本地验收，可以在 Supabase 里临时关闭 Confirm email。",
+      );
       setAuthPassword("");
     } catch (caught) {
-      setAuthNotice(caught instanceof Error ? caught.message : "登录失败，请检查邮箱和密码。");
+      setAuthNotice(getAuthErrorMessage(caught, authMode));
     } finally {
       setIsAuthenticating(false);
     }
