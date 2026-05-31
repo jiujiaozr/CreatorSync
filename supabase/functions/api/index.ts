@@ -53,7 +53,68 @@ const sendJson = (body: unknown, status = 200) =>
 
 const wechatEnvKeys = ["WECHAT_APP_ID", "WECHAT_APP_SECRET", "WECHAT_DEFAULT_THUMB_MEDIA_ID"] as const;
 
-const getMissingWechatConfig = () => wechatEnvKeys.filter((key) => !Deno.env.get(key));
+type WechatAccountConfig = {
+  accountId: string;
+  appId: string;
+  appSecret: string;
+  thumbMediaId: string;
+  author: string;
+};
+
+const normalizeWechatAccountConfig = (item: Record<string, unknown>): WechatAccountConfig | undefined => {
+  const appId = String(item.appId || item.app_id || item.accountId || item.account_id || "").trim();
+  const appSecret = String(item.appSecret || item.app_secret || "").trim();
+  const thumbMediaId = String(item.thumbMediaId || item.thumb_media_id || "").trim();
+  if (!appId || !appSecret || !thumbMediaId) {
+    return undefined;
+  }
+
+  return {
+    accountId: String(item.accountId || item.account_id || appId).trim(),
+    appId,
+    appSecret,
+    thumbMediaId,
+    author: String(item.author || Deno.env.get("WECHAT_DEFAULT_AUTHOR") || "CreatorSync").trim(),
+  };
+};
+
+const getWechatAccountConfigs = (): WechatAccountConfig[] => {
+  const rawConfigs = Deno.env.get("WECHAT_ACCOUNT_CONFIGS");
+  if (rawConfigs) {
+    try {
+      const parsed = JSON.parse(rawConfigs) as unknown;
+      const sourceList = Array.isArray(parsed)
+        ? parsed
+        : Object.entries(parsed as Record<string, Record<string, unknown>>).map(([accountId, value]) => ({
+            accountId,
+            ...value,
+          }));
+      return sourceList
+        .map((item) => normalizeWechatAccountConfig(item as Record<string, unknown>))
+        .filter((item): item is WechatAccountConfig => Boolean(item));
+    } catch {
+      return [];
+    }
+  }
+
+  const singleAccount = normalizeWechatAccountConfig({
+    accountId: Deno.env.get("WECHAT_APP_ID"),
+    appId: Deno.env.get("WECHAT_APP_ID"),
+    appSecret: Deno.env.get("WECHAT_APP_SECRET"),
+    thumbMediaId: Deno.env.get("WECHAT_DEFAULT_THUMB_MEDIA_ID"),
+    author: Deno.env.get("WECHAT_DEFAULT_AUTHOR"),
+  });
+
+  return singleAccount ? [singleAccount] : [];
+};
+
+const getMissingWechatConfig = () => {
+  if (Deno.env.get("WECHAT_ACCOUNT_CONFIGS")) {
+    return getWechatAccountConfigs().length > 0 ? [] : ["WECHAT_ACCOUNT_CONFIGS"];
+  }
+
+  return wechatEnvKeys.filter((key) => !Deno.env.get(key));
+};
 
 const htmlEscape = (value: unknown) =>
   String(value ?? "")
@@ -70,10 +131,20 @@ const bodyToWechatHtml = (body: unknown) =>
     .map((paragraph) => `<p>${htmlEscape(paragraph).replace(/\n/g, "<br/>")}</p>`)
     .join("");
 
-const assertWechatDraft = (payload: { draft?: PlatformDraft }) => {
+const assertWechatDraft = (payload: { draft?: PlatformDraft; accountId?: string }) => {
   const draft = payload.draft;
+  const accountId = String(payload.accountId ?? "").trim();
   if (!draft || typeof draft !== "object" || draft.platformId !== "wechat") {
     throw new Error("请先选择微信公众号草稿，再同步到公众号草稿箱。");
+  }
+
+  if (!accountId) {
+    throw new Error("请先在个人中心绑定公众号 ID，再发布公众号草稿。");
+  }
+
+  const accountConfig = getWechatAccountConfigs().find((item) => item.accountId === accountId || item.appId === accountId);
+  if (!accountConfig) {
+    throw new Error("当前绑定的公众号 ID 没有对应的后端密钥配置，请检查 WECHAT_ACCOUNT_CONFIGS 或 WECHAT_APP_ID。");
   }
 
   if (!String(draft.title ?? "").trim()) {
@@ -84,16 +155,14 @@ const assertWechatDraft = (payload: { draft?: PlatformDraft }) => {
     throw new Error("公众号正文不能为空。");
   }
 
-  return draft;
+  return { draft, accountId, accountConfig };
 };
 
-const getWechatAccessToken = async () => {
-  const appId = Deno.env.get("WECHAT_APP_ID") || "";
-  const appSecret = Deno.env.get("WECHAT_APP_SECRET") || "";
+const getWechatAccessToken = async (accountConfig: WechatAccountConfig) => {
   const url = new URL("https://api.weixin.qq.com/cgi-bin/token");
   url.searchParams.set("grant_type", "client_credential");
-  url.searchParams.set("appid", appId);
-  url.searchParams.set("secret", appSecret);
+  url.searchParams.set("appid", accountConfig.appId);
+  url.searchParams.set("secret", accountConfig.appSecret);
 
   const response = await fetch(url);
   const data = await response.json().catch(() => null);
@@ -105,7 +174,7 @@ const getWechatAccessToken = async () => {
   return data.access_token as string;
 };
 
-const addWechatDraft = async (accessToken: string, draft: PlatformDraft) => {
+const addWechatDraft = async (accessToken: string, draft: PlatformDraft, accountConfig: WechatAccountConfig) => {
   const digest = String(draft.meta?.summary || draft.subtitle || "")
     .trim()
     .slice(0, 120);
@@ -118,11 +187,11 @@ const addWechatDraft = async (accessToken: string, draft: PlatformDraft) => {
       articles: [
         {
           title: String(draft.title).trim().slice(0, 64),
-          author: Deno.env.get("WECHAT_DEFAULT_AUTHOR") || "CreatorSync",
+          author: accountConfig.author || "CreatorSync",
           digest,
           content: bodyToWechatHtml(draft.body),
           content_source_url: "",
-          thumb_media_id: Deno.env.get("WECHAT_DEFAULT_THUMB_MEDIA_ID"),
+          thumb_media_id: accountConfig.thumbMediaId,
           need_open_comment: 0,
           only_fans_can_comment: 0,
         },
@@ -142,10 +211,12 @@ const addWechatDraft = async (accessToken: string, draft: PlatformDraft) => {
 const handleWechatDraft = async (request: Request) => {
   if (request.method === "GET") {
     const missing = getMissingWechatConfig();
+    const accountConfigs = getWechatAccountConfigs();
     return sendJson({
       configured: missing.length === 0,
       message: missing.length === 0 ? "微信公众号草稿箱后端配置已就绪。" : "微信公众号草稿箱后端还缺少必要配置。",
       missing,
+      configuredAccountIds: accountConfigs.map((item) => item.accountId),
     });
   }
 
@@ -165,14 +236,15 @@ const handleWechatDraft = async (request: Request) => {
   }
 
   try {
-    const draft = assertWechatDraft(await request.json());
-    const accessToken = await getWechatAccessToken();
-    const data = await addWechatDraft(accessToken, draft);
+    const { draft, accountId, accountConfig } = assertWechatDraft(await request.json());
+    const accessToken = await getWechatAccessToken(accountConfig);
+    const data = await addWechatDraft(accessToken, draft, accountConfig);
     return sendJson({
       ok: true,
       platformId: "wechat",
       state: "success",
-      message: "已同步到微信公众号草稿箱，请到微信公众平台后台继续预览和发布。",
+      message: `已同步到绑定公众号 ${accountId} 的草稿箱，请到微信公众平台后台继续预览和发布。`,
+      accountId,
       draftMediaId: data.media_id,
       publishedAt: new Date().toISOString(),
     });

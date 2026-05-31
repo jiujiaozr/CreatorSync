@@ -70,6 +70,22 @@ WECHAT_DEFAULT_AUTHOR=可选，默认 CreatorSync
 
 `WECHAT_APP_SECRET` 不能放进前端 `.env.local` 或 GitHub Pages 构建变量。前端只配置 `VITE_AI_API_BASE_URL`，然后请求后端的 `/api/wechat/draft`。
 
+如果后续要让多个公众号 ID 都能真实同步，可以在后端配置 `WECHAT_ACCOUNT_CONFIGS`，它是一个 JSON 字符串：
+
+```json
+[
+  {
+    "accountId": "wx1234567890abcdef",
+    "appId": "wx1234567890abcdef",
+    "appSecret": "公众号 AppSecret",
+    "thumbMediaId": "默认封面素材 media_id",
+    "author": "CreatorSync"
+  }
+]
+```
+
+用户在个人中心绑定的公众号 ID 必须能在后端配置中找到，后端才会真正调用微信草稿箱接口。
+
 GitHub Pages 上线时，还需要在 GitHub 仓库的 `Settings -> Secrets and variables -> Actions` 中添加同名 Secrets：
 
 - `VITE_SUPABASE_URL`
@@ -392,22 +408,22 @@ Vercel 后端也可以继续使用：
 
 - 工作台顶部更新为 `CreatorSync V7`，说明当前是公众号草稿箱同步试点版。
 - 个人中心新增“四个平台账号接入”区域：微信公众号显示草稿箱同步试点，知乎、B站、小红书显示待接入和后续所需条件。
-- 微信公众号草稿新增“同步公众号草稿箱”按钮；个人中心如果已有当前公众号草稿，也可以直接同步，都会调用后端 `/api/wechat/draft`。
+- 个人中心支持绑定微信公众号 ID；工作台发布公众号草稿时会读取这个绑定 ID，并调用后端 `/api/wechat/draft`。
 - 后端新增 Vercel Serverless 入口 `api/wechat/draft.js`，Supabase Edge Function 也支持 `/api/wechat/draft` 路径。
-- 同步成功或失败都会进入现有发布记录；如果当前方案可保存，也会复用原有保存流程写入记录。
+- 发布成功或失败都会进入当前页面的发布记录；如果当前方案可保存，也会复用原有保存流程写入记录，未登录时不阻塞发布动作。
 
 微信公众号配置方式：
 
 1. 在公众号后台准备 AppID、AppSecret，并确认服务器 IP 白名单。
 2. 先上传默认封面图到公众号永久素材，拿到 `thumb_media_id`。
-3. 在 Vercel 或 Supabase Edge Function 环境变量中配置 `WECHAT_APP_ID`、`WECHAT_APP_SECRET`、`WECHAT_DEFAULT_THUMB_MEDIA_ID`。
+3. 在 Vercel 或 Supabase Edge Function 环境变量中配置 `WECHAT_APP_ID`、`WECHAT_APP_SECRET`、`WECHAT_DEFAULT_THUMB_MEDIA_ID`；如果要支持多个公众号，改用 `WECHAT_ACCOUNT_CONFIGS`。
 4. 前端继续通过 `VITE_AI_API_BASE_URL` 请求后端，完整路径是 `/api/wechat/draft`。
-5. 打开个人中心，刷新平台账号状态；如果后端配置完整，微信公众号卡片会显示草稿同步试点。
+5. 打开个人中心绑定公众号 ID；工作台点击“同步到绑定公众号”时，会把当前公众号草稿同步到这个绑定 ID 对应的草稿箱。
 
 本次仍然不做：
 
 - 不做用户级公众号 OAuth 授权，也不让用户在浏览器里输入或保存公众号密钥。
-- 不支持只在个人中心绑定公众号 AppID 后直接发布，因为真实草稿同步还需要 AppSecret、默认封面素材 `media_id` 和服务器 IP 白名单，这些都必须放在后端。
+- 不在个人中心保存 AppSecret；个人中心只保存公众号 ID，真实发布仍由后端使用 `WECHAT_APP_SECRET`、默认封面素材 `media_id` 和服务器 IP 白名单完成。
 - 不做公众号群发发布，只同步到草稿箱，最终预览和发布仍在微信公众平台后台完成。
 - 不接入知乎、B站、小红书真实发布 API，只保留接入中心入口和后续扩展结构。
 
@@ -422,7 +438,8 @@ Vercel 后端也可以继续使用：
 推荐验证方式：
 
 1. 运行 `npm run build`。
-2. 不配置微信环境变量时，打开个人中心确认微信公众号显示未配置或待配置。
-3. 生成微信公众号草稿后点击“同步公众号草稿箱”，确认页面给出清楚失败提示，并记录失败状态。
-4. 配置微信环境变量后重新部署后端，重新点击同步，确认微信返回成功后页面展示草稿 `media_id`。
-5. 回归检查 Mock AI、DeepSeek、保存当前方案、发布记录页、个人中心仍可正常打开。
+2. 不配置微信环境变量时，打开个人中心确认微信公众号显示未配置或待绑定。
+3. 在个人中心绑定公众号 ID 后，回到工作台生成微信公众号草稿。
+4. 点击“同步到绑定公众号”，确认页面按绑定 ID 调用后端；未配置后端时给出清楚失败提示并记录失败状态。
+5. 配置微信环境变量后重新部署后端，重新点击发布，确认微信返回成功后页面展示草稿 `media_id`。
+6. 回归检查 Mock AI、DeepSeek、保存当前方案、发布记录页、个人中心仍可正常打开。

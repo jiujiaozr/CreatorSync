@@ -34,10 +34,11 @@ export const getWechatDraftConfigStatus = async (): Promise<WechatDraftConfigSta
     configured: Boolean(data?.configured),
     message: data?.message || "已读取公众号草稿箱配置状态。",
     missing: data?.missing,
+    configuredAccountIds: data?.configuredAccountIds,
   };
 };
 
-export const syncWechatDraft = async (draft: PlatformDraft): Promise<WechatDraftSyncResult> => {
+export const syncWechatDraft = async (draft: PlatformDraft, accountId: string): Promise<WechatDraftSyncResult> => {
   const baseUrl = platformApiBaseUrl?.trim();
   if (!baseUrl) {
     throw new Error(missingBackendStatus.message);
@@ -48,7 +49,7 @@ export const syncWechatDraft = async (draft: PlatformDraft): Promise<WechatDraft
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ draft }),
+    body: JSON.stringify({ draft, accountId }),
   });
   const data = (await response.json().catch(() => null)) as Partial<WechatDraftSyncResult> & { error?: string } | null;
 
@@ -61,6 +62,7 @@ export const syncWechatDraft = async (draft: PlatformDraft): Promise<WechatDraft
     platformId: "wechat",
     state: data?.state ?? "success",
     message: data?.message || "公众号草稿箱同步完成。",
+    accountId: data?.accountId,
     draftMediaId: data?.draftMediaId,
     failureReason: data?.failureReason,
     publishedAt: data?.publishedAt,

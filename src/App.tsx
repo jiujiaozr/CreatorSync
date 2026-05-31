@@ -102,6 +102,7 @@ const defaultSource: SourceContent = {
 };
 
 const initialPlatformIds = platformAdapters.map((adapter) => adapter.id);
+const wechatAccountBindingKey = "creatorsync.wechatAccountId.v1";
 
 const integrationCapabilities: IntegrationCapability[] = [
   {
@@ -185,17 +186,28 @@ const emptyPublishResult = (platformId: PlatformId): PublishResult => ({
 
 const buildPlatformAccountConnections = (
   wechatStatus: WechatDraftConfigStatus,
-): PlatformAccountConnection[] => [
-  {
-    platformId: "wechat",
-    platformName: "微信公众号",
-    status: wechatStatus.configured ? "草稿同步试点" : "待配置",
-    capability: wechatStatus.configured ? "可同步到公众号草稿箱" : "等待后端配置后启用草稿箱同步",
-    requirements: ["项目级 AppID / AppSecret", "草稿箱接口权限", "默认封面素材 media_id", "服务器 IP 白名单"],
-    actionLabel: "同步当前草稿",
-    enabled: true,
-    note: `${wechatStatus.message} 真实同步不能只绑定 AppID，还需要后端保存 AppSecret 和默认封面素材 media_id。`,
-  },
+  boundWechatAccountId: string,
+): PlatformAccountConnection[] => {
+  const configuredHint = wechatStatus.configuredAccountIds?.length
+    ? `后端已配置：${wechatStatus.configuredAccountIds.join("、")}。`
+    : "";
+
+  return [
+    {
+      platformId: "wechat",
+      platformName: "微信公众号",
+      status: boundWechatAccountId ? "已绑定" : wechatStatus.configured ? "待绑定" : "待配置",
+      capability: boundWechatAccountId
+        ? `工作台会同步到已绑定公众号 ${boundWechatAccountId}`
+        : wechatStatus.configured
+          ? "后端接口已准备好，请先绑定公众号 ID"
+          : "等待后端配置后启用真实公众号同步",
+      requirements: ["公众号 ID", "后端 AppID / AppSecret", "默认封面素材 media_id", "服务器 IP 白名单"],
+      actionLabel: boundWechatAccountId ? "更新绑定" : "保存绑定",
+      enabled: true,
+      note: `${wechatStatus.message} ${configuredHint}个人中心绑定的是发布目标 ID；AppSecret 和素材 media_id 仍由后端保管。`,
+      boundAccountId: boundWechatAccountId || undefined,
+    },
   {
     platformId: "zhihu",
     platformName: "知乎",
@@ -226,7 +238,8 @@ const buildPlatformAccountConnections = (
     enabled: false,
     note: "当前公开入口更偏商家和电商服务，本次先保留半自动发布。",
   },
-];
+  ];
+};
 
 const stateLabel: Record<PublishState, string> = {
   idle: "未发布",
@@ -442,6 +455,15 @@ function App() {
   const [canFallbackToMock, setCanFallbackToMock] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isSyncingWechatDraft, setIsSyncingWechatDraft] = useState(false);
+  const [boundWechatAccountId, setBoundWechatAccountId] = useState(() => {
+    try {
+      return window.localStorage.getItem(wechatAccountBindingKey) ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [wechatAccountInput, setWechatAccountInput] = useState(boundWechatAccountId);
+  const [wechatBindingNotice, setWechatBindingNotice] = useState("");
   const [wechatConfigStatus, setWechatConfigStatus] = useState<WechatDraftConfigStatus>({
     configured: false,
     message: "正在检查微信公众号草稿箱配置。",
@@ -472,8 +494,8 @@ function App() {
   const currentEmail = session?.user.email ?? "";
   const authReady = isAuthConfigured();
   const platformAccountConnections = useMemo(
-    () => buildPlatformAccountConnections(wechatConfigStatus),
-    [wechatConfigStatus],
+    () => buildPlatformAccountConnections(wechatConfigStatus, boundWechatAccountId),
+    [wechatConfigStatus, boundWechatAccountId],
   );
 
   const loadProfile = async (nextSession: Session | null) => {
@@ -823,6 +845,34 @@ function App() {
     }
   };
 
+  const bindWechatAccountId = () => {
+    const nextAccountId = wechatAccountInput.trim();
+    if (!nextAccountId) {
+      setWechatBindingNotice("请填写公众号 ID 后再保存绑定。");
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(wechatAccountBindingKey, nextAccountId);
+      setBoundWechatAccountId(nextAccountId);
+      setWechatAccountInput(nextAccountId);
+      setWechatBindingNotice(`已绑定公众号 ID：${nextAccountId}。工作台发布时会使用这个目标。`);
+    } catch {
+      setWechatBindingNotice("保存公众号 ID 失败，请检查浏览器本地存储是否可用。");
+    }
+  };
+
+  const unbindWechatAccountId = () => {
+    try {
+      window.localStorage.removeItem(wechatAccountBindingKey);
+    } catch {
+      // localStorage 不可用时也允许清空当前页面状态。
+    }
+    setBoundWechatAccountId("");
+    setWechatAccountInput("");
+    setWechatBindingNotice("已取消公众号 ID 绑定。");
+  };
+
   const publishDraft = async (draft: PlatformDraft, retryCount: number): Promise<PublishAttempt | undefined> => {
     const draftIssues = getValidationIssues([draft]);
     if (draftIssues.length > 0) {
@@ -930,8 +980,10 @@ function App() {
       return;
     }
 
-    if (storageMode === "supabase" && !currentUserId) {
-      setError("请先登录账号，再同步微信公众号草稿箱。同步结果会写入当前账号的发布记录。");
+    const targetAccountId = boundWechatAccountId.trim();
+    if (!targetAccountId) {
+      setError("请先在个人中心绑定公众号 ID，再发布公众号草稿。");
+      setWechatBindingNotice("工作台需要读取这里绑定的公众号 ID，才能知道发布目标。");
       setActiveView("profile");
       return;
     }
@@ -950,16 +1002,18 @@ function App() {
       wechat: {
         platformId: "wechat",
         state: "publishing",
-        message: "正在同步到微信公众号草稿箱",
+        message: `正在发布到绑定公众号 ${targetAccountId} 的草稿箱`,
       },
     }));
 
     try {
-      const result = await syncWechatDraft(targetDraft);
+      const result = await syncWechatDraft(targetDraft, targetAccountId);
       const publishResult: PublishResult = {
         platformId: "wechat",
         state: result.state,
-        message: result.draftMediaId ? `${result.message} 草稿 media_id：${result.draftMediaId}` : result.message,
+        message: result.draftMediaId
+          ? `${result.message} 草稿 media_id：${result.draftMediaId}`
+          : result.message,
         publishedAt: new Date(result.publishedAt ?? Date.now()).toLocaleTimeString("zh-CN", {
           hour: "2-digit",
           minute: "2-digit",
@@ -980,7 +1034,9 @@ function App() {
       setPublishResults((current) => ({ ...current, wechat: publishResult }));
       setPublishAttempts((current) => [attempt, ...current]);
       setCopyNotice(publishResult.message);
-      void saveCurrentRecord([attempt, ...publishAttempts]);
+      if (storageMode === "local" || currentUserId) {
+        void saveCurrentRecord([attempt, ...publishAttempts]);
+      }
       void refreshWechatConfigStatus();
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "公众号草稿箱同步失败。";
@@ -1006,7 +1062,9 @@ function App() {
       setPublishResults((current) => ({ ...current, wechat: publishResult }));
       setPublishAttempts((current) => [attempt, ...current]);
       setCopyNotice(message);
-      void saveCurrentRecord([attempt, ...publishAttempts]);
+      if (storageMode === "local" || currentUserId) {
+        void saveCurrentRecord([attempt, ...publishAttempts]);
+      }
       void refreshWechatConfigStatus();
     } finally {
       setIsSyncingWechatDraft(false);
@@ -1278,6 +1336,7 @@ function App() {
             checklist={publishChecklist}
             copyNotice={copyNotice}
             isSyncingWechatDraft={isSyncingWechatDraft}
+            boundWechatAccountId={boundWechatAccountId}
             showChecklist={showPublishChecklist}
             onCopy={copyActiveDraft}
             onOpenEntry={openActivePublishEntry}
@@ -1346,7 +1405,9 @@ function App() {
           profile={profile}
           platformConnections={platformAccountConnections}
           wechatConfigStatus={wechatConfigStatus}
-          activeWechatDraft={drafts.wechat}
+          boundWechatAccountId={boundWechatAccountId}
+          wechatAccountInput={wechatAccountInput}
+          wechatBindingNotice={wechatBindingNotice}
           authMode={authMode}
           authEmail={authEmail}
           authPassword={authPassword}
@@ -1355,20 +1416,17 @@ function App() {
           isAuthenticating={isAuthenticating}
           isUploadingAvatar={isUploadingAvatar}
           isCheckingWechatConfig={isCheckingWechatConfig}
-          isSyncingWechatDraft={isSyncingWechatDraft}
           onAuthModeChange={setAuthMode}
           onAuthEmailChange={setAuthEmail}
           onAuthPasswordChange={setAuthPassword}
           onProfileNicknameChange={setProfileNickname}
+          onWechatAccountInputChange={setWechatAccountInput}
           onAuthSubmit={() => void handleAuthSubmit()}
           onSignOut={() => void handleSignOut()}
           onProfileSave={() => void handleProfileSave()}
           onAvatarChange={(file) => void handleAvatarChange(file)}
-          onOpenWechatWorkspace={() => {
-            setActivePlatform("wechat");
-            setActiveView("workspace");
-          }}
-          onSyncWechatDraft={() => void syncActiveWechatDraft(drafts.wechat)}
+          onBindWechatAccount={bindWechatAccountId}
+          onUnbindWechatAccount={unbindWechatAccountId}
           onRefreshWechatConfig={() => void refreshWechatConfigStatus()}
         />
       ) : null}
@@ -1558,7 +1616,9 @@ function ProfilePage({
   profile,
   platformConnections,
   wechatConfigStatus,
-  activeWechatDraft,
+  boundWechatAccountId,
+  wechatAccountInput,
+  wechatBindingNotice,
   authMode,
   authEmail,
   authPassword,
@@ -1567,17 +1627,17 @@ function ProfilePage({
   isAuthenticating,
   isUploadingAvatar,
   isCheckingWechatConfig,
-  isSyncingWechatDraft,
   onAuthModeChange,
   onAuthEmailChange,
   onAuthPasswordChange,
   onProfileNicknameChange,
+  onWechatAccountInputChange,
   onAuthSubmit,
   onSignOut,
   onProfileSave,
   onAvatarChange,
-  onOpenWechatWorkspace,
-  onSyncWechatDraft,
+  onBindWechatAccount,
+  onUnbindWechatAccount,
   onRefreshWechatConfig,
 }: {
   generatedCount: number;
@@ -1588,7 +1648,9 @@ function ProfilePage({
   profile?: UserProfile;
   platformConnections: PlatformAccountConnection[];
   wechatConfigStatus: WechatDraftConfigStatus;
-  activeWechatDraft?: PlatformDraft;
+  boundWechatAccountId: string;
+  wechatAccountInput: string;
+  wechatBindingNotice: string;
   authMode: "sign-in" | "sign-up";
   authEmail: string;
   authPassword: string;
@@ -1597,17 +1659,17 @@ function ProfilePage({
   isAuthenticating: boolean;
   isUploadingAvatar: boolean;
   isCheckingWechatConfig: boolean;
-  isSyncingWechatDraft: boolean;
   onAuthModeChange: (mode: "sign-in" | "sign-up") => void;
   onAuthEmailChange: (value: string) => void;
   onAuthPasswordChange: (value: string) => void;
   onProfileNicknameChange: (value: string) => void;
+  onWechatAccountInputChange: (value: string) => void;
   onAuthSubmit: () => void;
   onSignOut: () => void;
   onProfileSave: () => void;
   onAvatarChange: (file?: File) => void;
-  onOpenWechatWorkspace: () => void;
-  onSyncWechatDraft: () => void;
+  onBindWechatAccount: () => void;
+  onUnbindWechatAccount: () => void;
   onRefreshWechatConfig: () => void;
 }) {
   const email = session?.user.email ?? profile?.email ?? "";
@@ -1654,17 +1716,6 @@ function ProfilePage({
         <div className="platform-account-grid">
           {platformConnections.map((connection) => {
             const isWechat = connection.platformId === "wechat";
-            const hasWechatDraft = Boolean(activeWechatDraft);
-            const actionLabel = isWechat
-              ? hasWechatDraft
-                ? connection.actionLabel
-                : "先生成公众号草稿"
-              : connection.actionLabel;
-            const handleAction = isWechat
-              ? hasWechatDraft
-                ? onSyncWechatDraft
-                : onOpenWechatWorkspace
-              : undefined;
 
             return (
               <article className={`platform-account-item ${connection.enabled ? "enabled" : "reserved"}`} key={connection.platformId}>
@@ -1685,25 +1736,35 @@ function ProfilePage({
                 </div>
                 <p className="save-note">{connection.note}</p>
                 {isWechat ? (
-                  <p className="binding-note">
-                    绑定方式：当前是项目级后端绑定。用户级公众号 OAuth 绑定会放到后续迭代。
-                  </p>
-                ) : null}
-                <button
-                  className={connection.enabled ? "secondary-action" : "ghost-action"}
-                  type="button"
-                  onClick={handleAction}
-                  disabled={!connection.enabled || (isWechat && isSyncingWechatDraft)}
-                >
-                  {isWechat && isSyncingWechatDraft ? (
-                    <Loader2 className="spin" size={16} />
-                  ) : connection.enabled ? (
-                    <Send size={16} />
-                  ) : (
+                  <div className="wechat-bind-box">
+                    <label className="field compact-field">
+                      <span>绑定公众号 ID</span>
+                      <input
+                        value={wechatAccountInput}
+                        onChange={(event) => onWechatAccountInputChange(event.target.value)}
+                        placeholder="例如 wx1234567890abcdef"
+                      />
+                    </label>
+                    <div className="button-row account-bind-actions">
+                      <button className="secondary-action" type="button" onClick={onBindWechatAccount}>
+                        <KeyRound size={16} />
+                        {boundWechatAccountId ? "更新绑定" : "保存绑定"}
+                      </button>
+                      {boundWechatAccountId ? (
+                        <button className="ghost-action" type="button" onClick={onUnbindWechatAccount}>
+                          取消绑定
+                        </button>
+                      ) : null}
+                    </div>
+                    {boundWechatAccountId ? <p className="binding-note">已绑定：{boundWechatAccountId}</p> : null}
+                    {wechatBindingNotice ? <p className="save-note">{wechatBindingNotice}</p> : null}
+                  </div>
+                ) : (
+                  <button className="ghost-action" type="button" disabled>
                     <PlugZap size={16} />
-                  )}
-                  {isWechat && isSyncingWechatDraft ? "同步中..." : actionLabel}
-                </button>
+                    {connection.actionLabel}
+                  </button>
+                )}
               </article>
             );
           })}
@@ -2065,6 +2126,7 @@ function SemiAutoPublishPanel({
   checklist,
   copyNotice,
   isSyncingWechatDraft,
+  boundWechatAccountId,
   showChecklist,
   onCopy,
   onOpenEntry,
@@ -2075,6 +2137,7 @@ function SemiAutoPublishPanel({
   checklist: PublishChecklistItem[];
   copyNotice: string;
   isSyncingWechatDraft: boolean;
+  boundWechatAccountId: string;
   showChecklist: boolean;
   onCopy: () => void;
   onOpenEntry: () => void;
@@ -2102,7 +2165,7 @@ function SemiAutoPublishPanel({
         {activeDraft?.platformId === "wechat" ? (
           <button className="primary-action" type="button" onClick={onSyncWechatDraft} disabled={isSyncingWechatDraft}>
             {isSyncingWechatDraft ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
-            同步公众号草稿箱
+            {boundWechatAccountId ? "同步到绑定公众号" : "先绑定公众号 ID"}
           </button>
         ) : null}
         <button className="secondary-action" type="button" onClick={onCopy} disabled={!activeDraft}>

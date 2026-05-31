@@ -464,6 +464,23 @@ h3 {
   padding: 8px 10px;
 }
 
+.wechat-bind-box {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-field {
+  gap: 6px;
+}
+
+.compact-field input {
+  min-height: 38px;
+}
+
+.account-bind-actions {
+  justify-content: flex-start;
+}
+
 .status-pill {
   flex: 0 0 auto;
   border-radius: 999px;

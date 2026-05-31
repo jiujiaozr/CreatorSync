@@ -66,12 +66,13 @@ export type PlatformIntegrationProfile = {
 export type PlatformAccountConnection = {
   platformId: PlatformId;
   platformName: string;
-  status: "草稿同步试点" | "待配置" | "待接入";
+  status: "已绑定" | "待绑定" | "待配置" | "待接入";
   capability: string;
   requirements: string[];
   actionLabel: string;
   enabled: boolean;
   note: string;
+  boundAccountId?: string;
 };
 
 export type ValidationIssue = {
@@ -94,6 +95,7 @@ export type WechatDraftSyncResult = {
   platformId: "wechat";
   state: PublishState;
   message: string;
+  accountId?: string;
   draftMediaId?: string;
   failureReason?: string;
   publishedAt?: string;
@@ -103,6 +105,7 @@ export type WechatDraftConfigStatus = {
   configured: boolean;
   message: string;
   missing?: string[];
+  configuredAccountIds?: string[];
 };
 
 export type PublishAttempt = {
