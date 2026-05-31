@@ -46,6 +46,16 @@ create table if not exists public.publish_records (
   created_at text not null
 );
 
+create table if not exists public.wechat_accounts (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  account_id text not null,
+  app_id text not null,
+  app_secret_ciphertext text not null,
+  thumb_media_id text not null,
+  author text,
+  updated_at timestamptz not null default now()
+);
+
 grant usage on schema public to anon, authenticated;
 grant select, insert, update, delete on public.profiles to authenticated;
 grant select, insert, update, delete on public.content_records to authenticated;
@@ -56,6 +66,7 @@ alter table public.profiles enable row level security;
 alter table public.content_records enable row level security;
 alter table public.platform_drafts enable row level security;
 alter table public.publish_records enable row level security;
+alter table public.wechat_accounts enable row level security;
 
 alter table public.content_records
   add column if not exists user_id uuid references auth.users(id) on delete cascade;
@@ -67,6 +78,7 @@ drop policy if exists "demo platform drafts are public" on public.platform_draft
 drop policy if exists "platform drafts follow content ownership" on public.platform_drafts;
 drop policy if exists "demo publish records are public" on public.publish_records;
 drop policy if exists "publish records follow content ownership" on public.publish_records;
+drop policy if exists "wechat accounts are backend only" on public.wechat_accounts;
 
 create policy "profiles are owned by users"
   on public.profiles for all
@@ -138,6 +150,11 @@ create policy "publish records follow content ownership"
         and content_records.user_id = auth.uid()
     )
   );
+
+create policy "wechat accounts are backend only"
+  on public.wechat_accounts for all
+  using (false)
+  with check (false);
 
 insert into storage.buckets (id, name, public)
 values ('avatars', 'avatars', true)

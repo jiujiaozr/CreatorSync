@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -65,11 +67,98 @@ const getWechatAccountConfigs = () => {
 };
 
 const getMissingConfig = () => {
+  const missingBackend = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "WECHAT_SECRET_ENCRYPTION_KEY"].filter(
+    (key) => !process.env[key],
+  );
+  if (missingBackend.length > 0) {
+    return missingBackend;
+  }
+
   if (process.env.WECHAT_ACCOUNT_CONFIGS) {
     return getWechatAccountConfigs().length > 0 ? [] : ["WECHAT_ACCOUNT_CONFIGS"];
   }
 
-  return requiredEnvKeys.filter((key) => !process.env[key]);
+  return requiredEnvKeys.every((key) => process.env[key]) ? [] : [];
+};
+
+const getSupabaseEnv = () => {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error("后端缺少 Supabase 服务端配置，暂时不能读取微信公众号绑定。");
+  }
+
+  return { url: process.env.SUPABASE_URL, serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY };
+};
+
+const getBearerToken = (req) => {
+  const match = String(req.headers.authorization || "").match(/^Bearer\s+(.+)$/i);
+  if (!match?.[1]) {
+    throw new Error("请先登录账号，再同步微信公众号草稿。");
+  }
+
+  return match[1];
+};
+
+const getCurrentUserId = async (req) => {
+  const { url, serviceRoleKey } = getSupabaseEnv();
+  const response = await fetch(`${url}/auth/v1/user`, {
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${getBearerToken(req)}`,
+    },
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data?.id) {
+    throw new Error("登录状态已失效，请重新登录后再同步微信公众号草稿。");
+  }
+
+  return String(data.id);
+};
+
+const decryptSecret = (value) => {
+  const secret = process.env.WECHAT_SECRET_ENCRYPTION_KEY;
+  if (!secret || secret.length < 16) {
+    throw new Error("后端缺少 WECHAT_SECRET_ENCRYPTION_KEY，暂时不能读取 AppSecret。");
+  }
+
+  const [ivText, encryptedText] = String(value || "").split(".");
+  if (!ivText || !encryptedText) {
+    throw new Error("微信公众号 AppSecret 保存格式不正确，请重新绑定。");
+  }
+
+  const source = Buffer.from(encryptedText, "base64");
+  const encrypted = source.subarray(0, source.length - 16);
+  const tag = source.subarray(source.length - 16);
+  const key = crypto.createHash("sha256").update(secret).digest();
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivText, "base64"));
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
+};
+
+const getUserWechatAccountConfig = async (req) => {
+  const userId = await getCurrentUserId(req);
+  const { url, serviceRoleKey } = getSupabaseEnv();
+  const response = await fetch(`${url}/rest/v1/wechat_accounts?user_id=eq.${userId}&select=*`, {
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+    },
+  });
+  const rows = await response.json().catch(() => []);
+  if (!response.ok) {
+    throw new Error("读取微信公众号绑定失败，请检查 wechat_accounts 数据表。");
+  }
+  const row = rows[0];
+  if (!row) {
+    return undefined;
+  }
+
+  return {
+    accountId: row.account_id,
+    appId: row.app_id,
+    appSecret: decryptSecret(row.app_secret_ciphertext),
+    thumbMediaId: row.thumb_media_id,
+    author: row.author || "CreatorSync",
+  };
 };
 
 const htmlEscape = (value) =>
@@ -98,11 +187,6 @@ const assertWechatDraft = (payload) => {
     throw new Error("请先在个人中心绑定公众号 ID，再发布公众号草稿。");
   }
 
-  const accountConfig = getWechatAccountConfigs().find((item) => item.accountId === accountId || item.appId === accountId);
-  if (!accountConfig) {
-    throw new Error("当前绑定的公众号 ID 没有对应的后端密钥配置，请检查 WECHAT_ACCOUNT_CONFIGS 或 WECHAT_APP_ID。");
-  }
-
   if (!String(draft.title ?? "").trim()) {
     throw new Error("公众号标题不能为空。");
   }
@@ -111,7 +195,7 @@ const assertWechatDraft = (payload) => {
     throw new Error("公众号正文不能为空。");
   }
 
-  return { draft, accountId, accountConfig };
+  return { draft, accountId };
 };
 
 const getWechatAccessToken = async (accountConfig) => {
@@ -198,7 +282,16 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { draft, accountId, accountConfig } = assertWechatDraft(parseBody(req.body));
+    const { draft, accountId } = assertWechatDraft(parseBody(req.body));
+    const userAccountConfig = req.headers.authorization ? await getUserWechatAccountConfig(req) : undefined;
+    const accountConfig =
+      userAccountConfig ?? getWechatAccountConfigs().find((item) => item.accountId === accountId || item.appId === accountId);
+    if (!accountConfig) {
+      throw new Error("当前账号还没有保存微信公众号 AppID、AppSecret 和封面素材，请先到个人中心绑定。");
+    }
+    if (accountConfig.accountId !== accountId && accountConfig.appId !== accountId) {
+      throw new Error("当前绑定目标和后端保存的微信公众号不一致，请刷新个人中心后重试。");
+    }
     const accessToken = await getWechatAccessToken(accountConfig);
     const data = await addWechatDraft(accessToken, draft, accountConfig);
     return sendJson(res, 200, {

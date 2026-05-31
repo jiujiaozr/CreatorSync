@@ -106,6 +106,24 @@ export type WechatDraftConfigStatus = {
   message: string;
   missing?: string[];
   configuredAccountIds?: string[];
+  userAccount?: WechatAccountBinding;
+};
+
+export type WechatAccountBinding = {
+  configured: boolean;
+  accountId: string;
+  appId: string;
+  thumbMediaId: string;
+  author?: string;
+  updatedAt?: string;
+};
+
+export type WechatAccountBindingInput = {
+  accountId: string;
+  appId: string;
+  appSecret?: string;
+  thumbMediaId: string;
+  author?: string;
 };
 
 export type PublishAttempt = {

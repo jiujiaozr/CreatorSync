@@ -59,7 +59,20 @@ DEEPSEEK_MODEL=deepseek-chat
 
 `DEEPSEEK_MODEL` 可以不填，默认使用 `deepseek-chat`。注意：不要把 `DEEPSEEK_API_KEY` 写入 `.env.local`、前端代码或 GitHub Pages 构建变量，因为浏览器产物会被用户看到。
 
-微信公众号草稿箱同步也只在后端读取密钥：
+微信公众号草稿箱同步也只在后端读取密钥。第七次迭代支持两种演示方式：
+
+- 用户级绑定：用户登录后在个人中心填写公众号 AppID、AppSecret 和默认封面 `media_id`，后端加密保存到 `wechat_accounts` 表，工作台按当前登录用户同步草稿。
+- 项目级兜底：后端直接配置一个公众号，适合没有登录账号绑定流程时做联调。
+
+用户级绑定需要后端环境变量：
+
+```bash
+SUPABASE_URL=你的 Supabase 项目地址
+SUPABASE_SERVICE_ROLE_KEY=Supabase service_role key，只能放后端
+WECHAT_SECRET_ENCRYPTION_KEY=至少 16 位的加密密钥，只能放后端
+```
+
+项目级兜底配置：
 
 ```bash
 WECHAT_APP_ID=你的公众号 AppID
@@ -68,7 +81,7 @@ WECHAT_DEFAULT_THUMB_MEDIA_ID=已上传到公众号素材库的默认封面 medi
 WECHAT_DEFAULT_AUTHOR=可选，默认 CreatorSync
 ```
 
-`WECHAT_APP_SECRET` 不能放进前端 `.env.local` 或 GitHub Pages 构建变量。前端只配置 `VITE_AI_API_BASE_URL`，然后请求后端的 `/api/wechat/draft`。
+`WECHAT_APP_SECRET`、`SUPABASE_SERVICE_ROLE_KEY`、`WECHAT_SECRET_ENCRYPTION_KEY` 都不能放进前端 `.env.local` 或 GitHub Pages 构建变量。前端只配置 `VITE_AI_API_BASE_URL`，然后请求后端的 `/api/wechat/account` 和 `/api/wechat/draft`。
 
 如果后续要让多个公众号 ID 都能真实同步，可以在后端配置 `WECHAT_ACCOUNT_CONFIGS`，它是一个 JSON 字符串：
 
@@ -84,7 +97,7 @@ WECHAT_DEFAULT_AUTHOR=可选，默认 CreatorSync
 ]
 ```
 
-用户在个人中心绑定的公众号 ID 必须能在后端配置中找到，后端才会真正调用微信草稿箱接口。
+用户级绑定时，个人中心保存的是当前登录用户自己的公众号配置；项目级兜底时，用户在个人中心绑定的公众号 ID 必须能在后端配置中找到，后端才会真正调用微信草稿箱接口。
 
 GitHub Pages 上线时，还需要在 GitHub 仓库的 `Settings -> Secrets and variables -> Actions` 中添加同名 Secrets：
 
@@ -408,22 +421,24 @@ Vercel 后端也可以继续使用：
 
 - 工作台顶部更新为 `CreatorSync V7`，说明当前是公众号草稿箱同步试点版。
 - 个人中心新增“四个平台账号接入”区域：微信公众号显示草稿箱同步试点，知乎、B站、小红书显示待接入和后续所需条件。
-- 个人中心支持绑定微信公众号 ID；工作台发布公众号草稿时会读取这个绑定 ID，并调用后端 `/api/wechat/draft`。
-- 后端新增 Vercel Serverless 入口 `api/wechat/draft.js`，Supabase Edge Function 也支持 `/api/wechat/draft` 路径。
+- 个人中心支持用户级微信公众号绑定：填写公众号 ID、AppID、AppSecret、默认封面 `media_id` 和作者名。
+- 后端新增 Vercel Serverless 入口 `api/wechat/account.js`、`api/wechat/draft.js`，Supabase Edge Function 也支持 `/api/wechat/account` 和 `/api/wechat/draft` 路径。
+- AppSecret 只提交给后端加密保存到 `wechat_accounts` 表，前端不回显密钥；工作台同步草稿时按当前登录用户读取绑定配置。
 - 发布成功或失败都会进入当前页面的发布记录；如果当前方案可保存，也会复用原有保存流程写入记录，未登录时不阻塞发布动作。
 
 微信公众号配置方式：
 
-1. 在公众号后台准备 AppID、AppSecret，并确认服务器 IP 白名单。
-2. 先上传默认封面图到公众号永久素材，拿到 `thumb_media_id`。
-3. 在 Vercel 或 Supabase Edge Function 环境变量中配置 `WECHAT_APP_ID`、`WECHAT_APP_SECRET`、`WECHAT_DEFAULT_THUMB_MEDIA_ID`；如果要支持多个公众号，改用 `WECHAT_ACCOUNT_CONFIGS`。
-4. 前端继续通过 `VITE_AI_API_BASE_URL` 请求后端，完整路径是 `/api/wechat/draft`。
-5. 打开个人中心绑定公众号 ID；工作台点击“同步到绑定公众号”时，会把当前公众号草稿同步到这个绑定 ID 对应的草稿箱。
+1. 执行或同步 `supabase/schema.sql`，新增 `wechat_accounts` 表。
+2. 后端配置 `SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`、`WECHAT_SECRET_ENCRYPTION_KEY`。
+3. 用户在公众号后台准备 AppID、AppSecret，并确认服务器 IP 白名单。
+4. 用户先上传默认封面图到公众号素材库，拿到 `thumb_media_id`。
+5. 用户登录后打开个人中心，填写公众号 ID、AppID、AppSecret 和默认封面 `media_id` 并保存。
+6. 工作台点击“同步到绑定公众号”时，后端按当前登录用户读取配置，并真实调用微信草稿箱接口。
 
 本次仍然不做：
 
-- 不做用户级公众号 OAuth 授权，也不让用户在浏览器里输入或保存公众号密钥。
-- 不在个人中心保存 AppSecret；个人中心只保存公众号 ID，真实发布仍由后端使用 `WECHAT_APP_SECRET`、默认封面素材 `media_id` 和服务器 IP 白名单完成。
+- 不做用户级公众号 OAuth 授权；本次采用手动填写 AppID/AppSecret 的演示方案。
+- 不在前端保存或回显 AppSecret；密钥只在后端加密保存和调用微信接口时使用。
 - 不做公众号群发发布，只同步到草稿箱，最终预览和发布仍在微信公众平台后台完成。
 - 不接入知乎、B站、小红书真实发布 API，只保留接入中心入口和后续扩展结构。
 
@@ -438,8 +453,8 @@ Vercel 后端也可以继续使用：
 推荐验证方式：
 
 1. 运行 `npm run build`。
-2. 不配置微信环境变量时，打开个人中心确认微信公众号显示未配置或待绑定。
-3. 在个人中心绑定公众号 ID 后，回到工作台生成微信公众号草稿。
-4. 点击“同步到绑定公众号”，确认页面按绑定 ID 调用后端；未配置后端时给出清楚失败提示并记录失败状态。
-5. 配置微信环境变量后重新部署后端，重新点击发布，确认微信返回成功后页面展示草稿 `media_id`。
+2. 不配置后端密钥或未登录时，打开个人中心确认绑定表单给出清楚提示。
+3. 登录后在个人中心填写公众号 ID、AppID、AppSecret、默认封面 `media_id` 并保存。
+4. 回到工作台生成微信公众号草稿，点击“同步到绑定公众号”。
+5. 配置真实公众号和后端白名单后，确认微信返回成功，页面展示草稿 `media_id`。
 6. 回归检查 Mock AI、DeepSeek、保存当前方案、发布记录页、个人中心仍可正常打开。

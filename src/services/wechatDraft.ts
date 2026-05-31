@@ -1,4 +1,5 @@
 import type { PlatformDraft, WechatDraftConfigStatus, WechatDraftSyncResult } from "../types";
+import { getSupabaseClient } from "./supabaseClient";
 
 const platformApiBaseUrl = import.meta.env.VITE_AI_API_BASE_URL as string | undefined;
 
@@ -44,27 +45,32 @@ export const syncWechatDraft = async (draft: PlatformDraft, accountId: string): 
     throw new Error(missingBackendStatus.message);
   }
 
+  const client = getSupabaseClient();
+  const sessionResult = (await client?.auth.getSession()) ?? { data: { session: null } };
+  const token = sessionResult.data.session?.access_token;
+
   const response = await fetch(joinApiUrl(baseUrl, "/api/wechat/draft"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ draft, accountId }),
   });
-  const data = (await response.json().catch(() => null)) as Partial<WechatDraftSyncResult> & { error?: string } | null;
+  const result = (await response.json().catch(() => null)) as Partial<WechatDraftSyncResult> & { error?: string } | null;
 
   if (!response.ok) {
-    throw new Error(data?.error || data?.message || "同步公众号草稿箱失败，请稍后重试。");
+    throw new Error(result?.error || result?.message || "同步公众号草稿箱失败，请稍后重试。");
   }
 
   return {
-    ok: Boolean(data?.ok),
+    ok: Boolean(result?.ok),
     platformId: "wechat",
-    state: data?.state ?? "success",
-    message: data?.message || "公众号草稿箱同步完成。",
-    accountId: data?.accountId,
-    draftMediaId: data?.draftMediaId,
-    failureReason: data?.failureReason,
-    publishedAt: data?.publishedAt,
+    state: result?.state ?? "success",
+    message: result?.message || "公众号草稿箱同步完成。",
+    accountId: result?.accountId,
+    draftMediaId: result?.draftMediaId,
+    failureReason: result?.failureReason,
+    publishedAt: result?.publishedAt,
   };
 };
