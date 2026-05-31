@@ -457,6 +457,13 @@ h3 {
   line-height: 1.55;
 }
 
+.platform-account-item .binding-note {
+  border-left: 3px solid #1677ff;
+  background: #eef6ff;
+  color: #31566f;
+  padding: 8px 10px;
+}
+
 .status-pill {
   flex: 0 0 auto;
   border-radius: 999px;
