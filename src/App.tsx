@@ -345,6 +345,20 @@ const buildPublishSnapshot = (attempts: PublishAttempt[]) => {
   return { results, retries };
 };
 
+const hasScriptOutlineStructure = (value?: string) => {
+  const outline = value?.trim() ?? "";
+  if (!outline) {
+    return false;
+  }
+
+  const segments = outline
+    .split(/(?:->|→|=>|＞|>|｜|\||、|，|,|；|;|\n+|\r+|\d+[.、)]\s*)/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  return segments.length >= 2 || outline.length >= 12;
+};
+
 const formatDraftForCopy = (draft: PlatformDraft) => {
   const metaRows = Object.entries(draft.meta)
     .filter(([, value]) => value.trim())
@@ -2136,7 +2150,7 @@ function getValidationIssues(drafts: PlatformDraft[]): ValidationIssue[] {
       });
     }
 
-    if (draft.platformId === "bilibili" && !draft.meta.scriptOutline?.includes("->")) {
+    if (draft.platformId === "bilibili" && !hasScriptOutlineStructure(draft.meta.scriptOutline)) {
       issues.push({
         platformId: draft.platformId,
         platformName: draft.platformName,
