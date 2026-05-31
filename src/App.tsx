@@ -95,6 +95,29 @@ const navItems: Array<{ id: AppView; label: string; icon: typeof Home }> = [
   { id: "profile", label: "个人中心", icon: UserCircle },
 ];
 
+const viewHeroMeta: Record<AppView, { eyebrow: string; title: string; description: string }> = {
+  workspace: {
+    eyebrow: "Workspace",
+    title: "多平台内容工作台",
+    description: "把原始内容放在左侧，中间编辑平台版本，右侧完成预览、检查和发布准备。",
+  },
+  records: {
+    eyebrow: "Publish Records",
+    title: "发布记录与历史内容",
+    description: "集中查看模拟发布、公众号草稿箱同步结果，以及当前账号保存过的内容方案。",
+  },
+  integrations: {
+    eyebrow: "Integration Research",
+    title: "真实平台接入预研",
+    description: "先看清平台授权、接口能力和风控边界，再选择最适合下一步真实接入的方向。",
+  },
+  profile: {
+    eyebrow: "Personal Center",
+    title: "账号与平台绑定中心",
+    description: "管理登录资料、微信公众号绑定和后续平台账号接入状态。",
+  },
+};
+
 const defaultSource: SourceContent = {
   title: "如何把一篇内容高效发布到多个平台",
   body: "创作者经常需要把同一份内容发布到公众号、知乎、B站、小红书等平台。\n不同平台的标题、正文结构、标签和表达方式都不一样，手动改写很容易耗时。\n如果能先生成平台版本，再统一编辑和预览，就能明显提高发布效率。",
@@ -1164,51 +1187,64 @@ function App() {
     }
   };
 
+  const activeHero = viewHeroMeta[activeView];
+
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <div className="brand-lockup" aria-label="CreatorSync 内容开发助手">
-          <LogoMark />
-          <div>
-            <p className="eyebrow">CreatorSync V7</p>
-            <h1>内容开发助手</h1>
-            <p className="topbar-copy">公众号草稿箱同步试点版，支持 DeepSeek 和 Mock AI 双模式。</p>
+      <div className="app-frame">
+        <aside className="side-nav" aria-label="页面导航">
+          <div className="side-brand" aria-label="应用 Logo">
+            <LogoMark />
           </div>
-        </div>
 
-        <nav className="top-nav" aria-label="主导航">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                className={activeView === item.id ? "active" : ""}
-                type="button"
-                onClick={() => setActiveView(item.id)}
-              >
-                <Icon size={16} />
-                {item.label}
+          <nav className="side-menu" aria-label="主导航">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  className={activeView === item.id ? "active" : ""}
+                  type="button"
+                  onClick={() => setActiveView(item.id)}
+                >
+                  <Icon size={17} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="side-footer">
+            <span><CheckCircle2 size={15} /> {generationModeLabel[generationMode]}</span>
+            <span><ShieldCheck size={15} /> {session ? "已登录" : "未登录"}</span>
+          </div>
+        </aside>
+
+        <section className="main-stage">
+          <header className="topbar">
+            <div className="stage-title">
+              <p className="eyebrow">{activeHero.eyebrow}</p>
+              <h1>{activeHero.title}</h1>
+            </div>
+
+            <div className="user-area">
+              <div className="status-strip" aria-label="项目状态">
+                <span><CheckCircle2 size={16} /> {generationModeLabel[generationMode]}</span>
+                <span><ShieldCheck size={16} /> {session ? "已登录" : "未登录"}</span>
+              </div>
+              <button className="avatar-button" type="button" onClick={() => setActiveView("profile")} aria-label="进入个人中心">
+                <span className="avatar-face">
+                  {profile?.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : getInitials(profile?.nickname ?? currentEmail)}
+                </span>
+                <span className="avatar-name">{profile?.nickname ?? (session ? "已登录" : "登录")}</span>
               </button>
-            );
-          })}
-        </nav>
+            </div>
+          </header>
 
-        <div className="user-area">
-          <div className="status-strip" aria-label="项目状态">
-            <span><CheckCircle2 size={16} /> {generationModeLabel[generationMode]}</span>
-            <span><ShieldCheck size={16} /> {session ? "已登录" : "未登录"}</span>
-          </div>
-          <button className="avatar-button" type="button" onClick={() => setActiveView("profile")} aria-label="进入个人中心">
-            <span className="avatar-face">
-              {profile?.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : getInitials(profile?.nickname ?? currentEmail)}
-            </span>
-            <span className="avatar-name">{profile?.nickname ?? (session ? "已登录" : "登录")}</span>
-          </button>
-        </div>
-      </header>
+          <PageHero meta={activeHero} activeView={activeView} />
 
-      {activeView === "workspace" ? (
-        <>
+          {activeView === "workspace" ? (
+            <>
           <DashboardStats
             generatedCount={generatedDrafts.length}
             selectedCount={selectedPlatforms.length}
@@ -1398,72 +1434,74 @@ function App() {
 
           {activeDraft ? <PlatformPreview draft={activeDraft} /> : <PreviewPlaceholder />}
 
-          <SemiAutoPublishPanel
-            activeDraft={activeDraft}
-            checklist={publishChecklist}
-            copyNotice={copyNotice}
-            isSyncingWechatDraft={isSyncingWechatDraft}
-            boundWechatAccountId={boundWechatAccount?.accountId ?? ""}
-            showChecklist={showPublishChecklist}
-            onCopy={copyActiveDraft}
-            onOpenEntry={openActivePublishEntry}
-            onSyncWechatDraft={() => void syncActiveWechatDraft()}
-            onToggleChecklist={() => setShowPublishChecklist((current) => !current)}
-          />
+          <div className="preview-side-stack">
+            <SemiAutoPublishPanel
+              activeDraft={activeDraft}
+              checklist={publishChecklist}
+              copyNotice={copyNotice}
+              isSyncingWechatDraft={isSyncingWechatDraft}
+              boundWechatAccountId={boundWechatAccount?.accountId ?? ""}
+              showChecklist={showPublishChecklist}
+              onCopy={copyActiveDraft}
+              onOpenEntry={openActivePublishEntry}
+              onSyncWechatDraft={() => void syncActiveWechatDraft()}
+              onToggleChecklist={() => setShowPublishChecklist((current) => !current)}
+            />
 
-          <div className="publish-box">
-            <div className="publish-head">
-              <h3>发布状态</h3>
-              <button
-                className="secondary-action"
-                type="button"
-                onClick={() => setShowPublishConfirm(true)}
-                disabled={!canPublish}
-              >
-                {isPublishing ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
-                模拟发布
-              </button>
+            <div className="publish-box">
+              <div className="publish-head">
+                <h3>发布状态</h3>
+                <button
+                  className="secondary-action"
+                  type="button"
+                  onClick={() => setShowPublishConfirm(true)}
+                  disabled={!canPublish}
+                >
+                  {isPublishing ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
+                  模拟发布
+                </button>
+              </div>
+
+              <div className="publish-list">
+                {platformAdapters.map((adapter) => (
+                  <PublishItem
+                    key={adapter.id}
+                    adapterId={adapter.id}
+                    result={publishResults[adapter.id]}
+                    retryCount={retryCounts[adapter.id]}
+                    isPublishing={isPublishing}
+                    onRetry={() => retryPublish(adapter.id)}
+                  />
+                ))}
+              </div>
             </div>
 
-            <div className="publish-list">
-              {platformAdapters.map((adapter) => (
-                <PublishItem
-                  key={adapter.id}
-                  adapterId={adapter.id}
-                  result={publishResults[adapter.id]}
-                  retryCount={retryCounts[adapter.id]}
-                  isPublishing={isPublishing}
-                  onRetry={() => retryPublish(adapter.id)}
-                />
-              ))}
-            </div>
+            <PublishHistory attempts={publishAttempts} />
           </div>
-
-          <PublishHistory attempts={publishAttempts} />
         </aside>
       </section>
-        </>
-      ) : null}
+            </>
+          ) : null}
 
-      {activeView === "records" ? (
-        <RecordsPage
-          attempts={publishAttempts}
-          records={savedRecords}
-          activeRecordId={activeRecordId}
-          storageMode={storageMode}
-          isLoading={isLoadingRecords}
-          onBackToWorkspace={() => setActiveView("workspace")}
-          onOpenRecord={(recordId) => void openSavedRecord(recordId)}
-          onRefreshRecords={() => void refreshSavedRecords()}
-        />
-      ) : null}
+          {activeView === "records" ? (
+            <RecordsPage
+              attempts={publishAttempts}
+              records={savedRecords}
+              activeRecordId={activeRecordId}
+              storageMode={storageMode}
+              isLoading={isLoadingRecords}
+              onBackToWorkspace={() => setActiveView("workspace")}
+              onOpenRecord={(recordId) => void openSavedRecord(recordId)}
+              onRefreshRecords={() => void refreshSavedRecords()}
+            />
+          ) : null}
 
-      {activeView === "integrations" ? (
-        <IntegrationPage capabilities={integrationCapabilities} profiles={platformIntegrationProfiles} />
-      ) : null}
+          {activeView === "integrations" ? (
+            <IntegrationPage capabilities={integrationCapabilities} profiles={platformIntegrationProfiles} />
+          ) : null}
 
-      {activeView === "profile" ? (
-        <ProfilePage
+          {activeView === "profile" ? (
+            <ProfilePage
           generatedCount={generatedDrafts.length}
           publishCount={publishAttempts.length}
           storageMode={storageMode}
@@ -1503,32 +1541,52 @@ function App() {
           onBindWechatAccount={() => void bindWechatAccountId()}
           onUnbindWechatAccount={() => void unbindWechatAccountId()}
           onRefreshWechatConfig={() => void refreshWechatConfigStatus()}
-        />
-      ) : null}
+            />
+          ) : null}
 
-      {showPublishConfirm ? (
-        <div className="modal-backdrop" role="presentation">
-          <section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="publish-title">
-            <h2 id="publish-title">确认模拟发布</h2>
-            <p>本次会把已生成的平台版本进入模拟发布流程，不会发送到真实平台。发布前会先检查必填字段。</p>
-            <div className="confirm-list">
-              {generatedDrafts.map((draft) => (
-                <span key={draft.platformId}>{draft.platformName}</span>
-              ))}
+          {showPublishConfirm ? (
+            <div className="modal-backdrop" role="presentation">
+              <section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="publish-title">
+                <h2 id="publish-title">确认模拟发布</h2>
+                <p>本次会把已生成的平台版本进入模拟发布流程，不会发送到真实平台。发布前会先检查必填字段。</p>
+                <div className="confirm-list">
+                  {generatedDrafts.map((draft) => (
+                    <span key={draft.platformId}>{draft.platformName}</span>
+                  ))}
+                </div>
+                <div className="modal-actions">
+                  <button className="ghost-action" type="button" onClick={() => setShowPublishConfirm(false)}>
+                    取消
+                  </button>
+                  <button className="secondary-action" type="button" onClick={publishAll}>
+                    <Send size={16} />
+                    确认模拟发布
+                  </button>
+                </div>
+              </section>
             </div>
-            <div className="modal-actions">
-              <button className="ghost-action" type="button" onClick={() => setShowPublishConfirm(false)}>
-                取消
-              </button>
-              <button className="secondary-action" type="button" onClick={publishAll}>
-                <Send size={16} />
-                确认模拟发布
-              </button>
-            </div>
-          </section>
-        </div>
-      ) : null}
+          ) : null}
+        </section>
+      </div>
     </main>
+  );
+}
+
+function PageHero({ meta, activeView }: { meta: (typeof viewHeroMeta)[AppView]; activeView: AppView }) {
+  const activeItem = navItems.find((item) => item.id === activeView) ?? navItems[0];
+  const Icon = activeItem.icon;
+
+  return (
+    <section className="page-hero" aria-label={meta.title}>
+      <span className="page-hero-icon">
+        <Icon size={26} />
+      </span>
+      <div>
+        <p className="eyebrow">{meta.eyebrow}</p>
+        <h2>{meta.title}</h2>
+        <p>{meta.description}</p>
+      </div>
+    </section>
   );
 }
 
@@ -1651,7 +1709,7 @@ function IntegrationPage({
   profiles: PlatformIntegrationProfile[];
 }) {
   return (
-    <section className="page-grid">
+    <section className="page-grid integration-page">
       <article className="page-card">
         <div className="page-heading">
           <div>
@@ -1790,6 +1848,92 @@ function ProfilePage({
         </div>
       </article>
 
+      <aside className="page-card side-card">
+        <div className="panel-heading compact">
+          <Settings size={19} />
+          <h2>{session ? "账号资料" : "登录 / 注册"}</h2>
+        </div>
+        {!authReady ? (
+          <div className="notice error">
+            <AlertCircle size={18} />
+            当前没有配置 Supabase 环境变量，真实登录和头像上传暂不可用。
+          </div>
+        ) : null}
+
+        {session ? (
+          <div className="account-panel">
+            <div className="account-row">
+              <span>邮箱</span>
+              <strong>{email}</strong>
+            </div>
+            <label className="field">
+              <span>昵称</span>
+              <input value={profileNickname} onChange={(event) => onProfileNicknameChange(event.target.value)} />
+            </label>
+            <label className="upload-field">
+              <UploadCloud size={17} />
+              {isUploadingAvatar ? "上传中..." : "上传或替换头像"}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={(event) => onAvatarChange(event.target.files?.[0])}
+                disabled={isUploadingAvatar}
+              />
+            </label>
+            <div className="button-row profile-actions">
+              <button className="secondary-action" type="button" onClick={onProfileSave} disabled={isAuthenticating}>
+                {isAuthenticating ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+                保存资料
+              </button>
+              <button className="ghost-action" type="button" onClick={onSignOut} disabled={isAuthenticating}>
+                退出登录
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="account-panel">
+            <div className="auth-tabs" role="tablist" aria-label="登录方式">
+              <button type="button" className={authMode === "sign-in" ? "active" : ""} onClick={() => onAuthModeChange("sign-in")}>
+                登录
+              </button>
+              <button type="button" className={authMode === "sign-up" ? "active" : ""} onClick={() => onAuthModeChange("sign-up")}>
+                注册
+              </button>
+            </div>
+            <label className="field">
+              <span>邮箱</span>
+              <input value={authEmail} onChange={(event) => onAuthEmailChange(event.target.value)} placeholder="name@example.com" />
+            </label>
+            <label className="field">
+              <span>密码</span>
+              <input
+                type="password"
+                value={authPassword}
+                onChange={(event) => onAuthPasswordChange(event.target.value)}
+                placeholder="至少 6 位"
+              />
+            </label>
+            {authMode === "sign-up" ? (
+              <label className="field">
+                <span>昵称</span>
+                <input value={profileNickname} onChange={(event) => onProfileNicknameChange(event.target.value)} />
+              </label>
+            ) : null}
+            <button className="primary-action" type="button" onClick={onAuthSubmit} disabled={isAuthenticating || !authReady}>
+              {isAuthenticating ? <Loader2 className="spin" size={18} /> : <KeyRound size={18} />}
+              {authMode === "sign-in" ? "登录账号" : "注册账号"}
+            </button>
+          </div>
+        )}
+
+        {authNotice ? <p className="save-note">{authNotice}</p> : null}
+        <div className="api-list account-hints">
+          <span>保存方式：{storageModeLabel[storageMode]}</span>
+          <span>头像存储：Supabase Storage avatars bucket</span>
+          <span>数据隔离：只读取当前登录用户的内容记录</span>
+        </div>
+      </aside>
+
       <article className="page-card platform-account-card">
         <div className="page-heading compact-heading">
           <div>
@@ -1904,91 +2048,6 @@ function ProfilePage({
         </div>
       </article>
 
-      <aside className="page-card side-card">
-        <div className="panel-heading compact">
-          <Settings size={19} />
-          <h2>{session ? "账号资料" : "登录 / 注册"}</h2>
-        </div>
-        {!authReady ? (
-          <div className="notice error">
-            <AlertCircle size={18} />
-            当前没有配置 Supabase 环境变量，真实登录和头像上传暂不可用。
-          </div>
-        ) : null}
-
-        {session ? (
-          <div className="account-panel">
-            <div className="account-row">
-              <span>邮箱</span>
-              <strong>{email}</strong>
-            </div>
-            <label className="field">
-              <span>昵称</span>
-              <input value={profileNickname} onChange={(event) => onProfileNicknameChange(event.target.value)} />
-            </label>
-            <label className="upload-field">
-              <UploadCloud size={17} />
-              {isUploadingAvatar ? "上传中..." : "上传或替换头像"}
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                onChange={(event) => onAvatarChange(event.target.files?.[0])}
-                disabled={isUploadingAvatar}
-              />
-            </label>
-            <div className="button-row profile-actions">
-              <button className="secondary-action" type="button" onClick={onProfileSave} disabled={isAuthenticating}>
-                {isAuthenticating ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
-                保存资料
-              </button>
-              <button className="ghost-action" type="button" onClick={onSignOut} disabled={isAuthenticating}>
-                退出登录
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="account-panel">
-            <div className="auth-tabs" role="tablist" aria-label="登录方式">
-              <button type="button" className={authMode === "sign-in" ? "active" : ""} onClick={() => onAuthModeChange("sign-in")}>
-                登录
-              </button>
-              <button type="button" className={authMode === "sign-up" ? "active" : ""} onClick={() => onAuthModeChange("sign-up")}>
-                注册
-              </button>
-            </div>
-            <label className="field">
-              <span>邮箱</span>
-              <input value={authEmail} onChange={(event) => onAuthEmailChange(event.target.value)} placeholder="name@example.com" />
-            </label>
-            <label className="field">
-              <span>密码</span>
-              <input
-                type="password"
-                value={authPassword}
-                onChange={(event) => onAuthPasswordChange(event.target.value)}
-                placeholder="至少 6 位"
-              />
-            </label>
-            {authMode === "sign-up" ? (
-              <label className="field">
-                <span>昵称</span>
-                <input value={profileNickname} onChange={(event) => onProfileNicknameChange(event.target.value)} />
-              </label>
-            ) : null}
-            <button className="primary-action" type="button" onClick={onAuthSubmit} disabled={isAuthenticating || !authReady}>
-              {isAuthenticating ? <Loader2 className="spin" size={18} /> : <KeyRound size={18} />}
-              {authMode === "sign-in" ? "登录账号" : "注册账号"}
-            </button>
-          </div>
-        )}
-
-        {authNotice ? <p className="save-note">{authNotice}</p> : null}
-        <div className="api-list account-hints">
-          <span>保存方式：{storageModeLabel[storageMode]}</span>
-          <span>头像存储：Supabase Storage avatars bucket</span>
-          <span>数据隔离：只读取当前登录用户的内容记录</span>
-        </div>
-      </aside>
     </section>
   );
 }
@@ -2018,33 +2077,30 @@ function LogoMark() {
     <div className="logo-mark" aria-hidden="true">
       <svg viewBox="0 0 64 64" role="img">
         <defs>
-          <linearGradient id="logoGradient" x1="10" x2="54" y1="8" y2="56" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#1b7cff" />
-            <stop offset="0.58" stopColor="#19c2d1" />
-            <stop offset="1" stopColor="#6b7cff" />
+          <linearGradient id="logoGradient" x1="16" x2="48" y1="14" y2="50" gradientUnits="userSpaceOnUse">
+            <stop stopColor="#3369f6" />
+            <stop offset="1" stopColor="#29c9d5" />
           </linearGradient>
         </defs>
+        <rect x="10" y="10" width="44" height="44" rx="10" fill="url(#logoGradient)" />
         <path
-          d="M12 16C12 11.6 15.6 8 20 8H44C48.4 8 52 11.6 52 16V48C52 52.4 48.4 56 44 56H20C15.6 56 12 52.4 12 48V16Z"
-          fill="url(#logoGradient)"
-        />
-        <path
-          d="M40.5 19.5H29.8C23.7 19.5 19.5 24.2 19.5 30C19.5 35.8 23.7 40.5 29.8 40.5H40.5"
+          d="M45 25H29.5C22.5 25 18 29.7 18 35.5C18 41.6 22.5 46.5 29.5 46.5H45"
           fill="none"
           stroke="white"
           strokeLinecap="round"
           strokeLinejoin="round"
-          strokeWidth="6"
+          strokeWidth="4.6"
         />
         <path
-          d="M27 32H39C42.6 32 45 34.2 45 37.4C45 40.8 42.4 43 38.7 43H24"
+          d="M19 31.8H34C41 31.8 46 27 46 20.5"
           fill="none"
-          stroke="#e7fbff"
+          stroke="#dffcff"
           strokeLinecap="round"
           strokeLinejoin="round"
-          strokeWidth="5"
+          strokeWidth="4.6"
         />
-        <path d="M44 13L51 20L44 27" fill="none" stroke="#d8efff" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" />
+        <path d="M40.5 16L46 21.2L40.5 26.4" fill="none" stroke="#dffcff" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3.5" />
+        <path d="M25 36H39" stroke="#ffffff" strokeLinecap="round" strokeWidth="4.2" />
       </svg>
     </div>
   );
