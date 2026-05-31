@@ -2,9 +2,12 @@
 
 ## Demo 演示视频
 
-视频链接：[百度网盘 - demo](https://pan.baidu.com/s/1TtkzlhEvEGvLHncQtpYJug?pwd=1234)
+视频链接：
 
-提取码：`1234`
+- [Bilibili 演示视频](https://www.bilibili.com/video/BV1WxVQ6WEaL?vd_source=7c4481c8990a1bf4a2cd0d860827c3ee)
+- [百度网盘 - demo](https://pan.baidu.com/s/1TtkzlhEvEGvLHncQtpYJug?pwd=1234)
+
+百度网盘提取码：`1234`
 
 内容开发助手是一个面向内容创作者的多平台发布 Demo。用户输入一份原始内容，选择公众号、知乎、B站、小红书后，系统会生成不同平台的适配文案，并支持编辑、预览和一键模拟发布。
 
