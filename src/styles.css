@@ -303,6 +303,10 @@ h3 {
   margin-bottom: 14px;
 }
 
+.compact-heading {
+  align-items: flex-start;
+}
+
 .page-heading h2 {
   font-size: 22px;
 }
@@ -399,6 +403,97 @@ h3 {
   display: block;
   margin-top: 6px;
   color: #17313b;
+}
+
+.platform-account-card {
+  grid-column: 1 / -1;
+}
+
+.section-copy {
+  margin: -4px 0 14px;
+  color: #536878;
+  line-height: 1.65;
+}
+
+.platform-account-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.platform-account-item {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid #dce6ee;
+  border-radius: 8px;
+  background: #f9fcfe;
+  padding: 12px;
+}
+
+.platform-account-item.enabled {
+  border-color: #b8d8f7;
+  background: #f5fbff;
+}
+
+.platform-account-head,
+.platform-account-head > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.platform-account-head {
+  justify-content: space-between;
+}
+
+.platform-account-head strong {
+  color: #1f3444;
+}
+
+.platform-account-item p {
+  margin: 0;
+  color: #526879;
+  line-height: 1.55;
+}
+
+.platform-account-item .binding-note {
+  border-left: 3px solid #1677ff;
+  background: #eef6ff;
+  color: #31566f;
+  padding: 8px 10px;
+}
+
+.wechat-bind-box {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-field {
+  gap: 6px;
+}
+
+.compact-field input {
+  min-height: 38px;
+}
+
+.account-bind-actions {
+  justify-content: flex-start;
+}
+
+.status-pill {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #fff5d9;
+  color: #8a5b00;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.status-pill.success {
+  background: #e7f7ed;
+  color: #167243;
 }
 
 .account-panel {
@@ -1139,7 +1234,7 @@ h3 {
 
 .semi-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
   margin: 10px 0;
 }
@@ -1450,6 +1545,10 @@ h3 {
     grid-template-columns: 1fr;
   }
 
+  .platform-account-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .research-grid {
     grid-template-columns: 1fr;
   }
@@ -1489,6 +1588,7 @@ h3 {
   .workspace,
   .field-row,
   .platform-grid,
+  .platform-account-grid,
   .tabs {
     grid-template-columns: 1fr;
   }

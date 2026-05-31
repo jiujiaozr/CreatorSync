@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-第六次迭代重点梳理真实平台接入限制，并提供半自动发布清单。真实 AI 仍然通过后端代理调用；真实平台发布暂不一键直发，而是先支持复制内容、打开发布入口和发布前检查。
+第七次迭代新增平台账号接入中心，并把微信公众号作为草稿箱同步试点。真实 AI 仍然通过后端代理调用；真实平台发布暂不做群发，只先支持把公众号图文同步到草稿箱。
 
 - 原始标题、正文、内容类型、目标受众、生成偏好输入
 - 公众号、知乎、B站、小红书平台选择
@@ -19,6 +19,7 @@
 - DeepSeek 调用失败时给出提示，并允许回退到 Mock AI
 - 每个平台展示授权状态、所需权限、接入限制和发布入口
 - 生成半自动发布清单，并支持复制当前平台发布内容
+- 个人中心展示四个平台账号接入状态，微信公众号支持草稿箱同步试点
 - 平台适配器结构，方便后续扩展抖音、视频号、微博
 
 ## 本地运行
@@ -58,6 +59,46 @@ DEEPSEEK_MODEL=deepseek-chat
 
 `DEEPSEEK_MODEL` 可以不填，默认使用 `deepseek-chat`。注意：不要把 `DEEPSEEK_API_KEY` 写入 `.env.local`、前端代码或 GitHub Pages 构建变量，因为浏览器产物会被用户看到。
 
+微信公众号草稿箱同步也只在后端读取密钥。第七次迭代支持两种演示方式：
+
+- 用户级绑定：用户登录后在个人中心填写公众号 AppID、AppSecret 和默认封面 `media_id`，后端加密保存到 `wechat_accounts` 表，工作台按当前登录用户同步草稿。
+- 项目级兜底：后端直接配置一个公众号，适合没有登录账号绑定流程时做联调。
+
+用户级绑定需要后端环境变量：
+
+```bash
+SUPABASE_URL=你的 Supabase 项目地址
+SUPABASE_SERVICE_ROLE_KEY=Supabase service_role key，只能放后端
+WECHAT_SECRET_ENCRYPTION_KEY=至少 16 位的加密密钥，只能放后端
+```
+
+项目级兜底配置：
+
+```bash
+WECHAT_APP_ID=你的公众号 AppID
+WECHAT_APP_SECRET=你的公众号 AppSecret
+WECHAT_DEFAULT_THUMB_MEDIA_ID=已上传到公众号素材库的默认封面 media_id
+WECHAT_DEFAULT_AUTHOR=可选，默认 CreatorSync
+```
+
+`WECHAT_APP_SECRET`、`SUPABASE_SERVICE_ROLE_KEY`、`WECHAT_SECRET_ENCRYPTION_KEY` 都不能放进前端 `.env.local` 或 GitHub Pages 构建变量。前端只配置 `VITE_AI_API_BASE_URL`，然后请求后端的 `/api/wechat/account` 和 `/api/wechat/draft`。
+
+如果后续要让多个公众号 ID 都能真实同步，可以在后端配置 `WECHAT_ACCOUNT_CONFIGS`，它是一个 JSON 字符串：
+
+```json
+[
+  {
+    "accountId": "wx1234567890abcdef",
+    "appId": "wx1234567890abcdef",
+    "appSecret": "公众号 AppSecret",
+    "thumbMediaId": "默认封面素材 media_id",
+    "author": "CreatorSync"
+  }
+]
+```
+
+用户级绑定时，个人中心保存的是当前登录用户自己的公众号配置；项目级兜底时，用户在个人中心绑定的公众号 ID 必须能在后端配置中找到，后端才会真正调用微信草稿箱接口。
+
 GitHub Pages 上线时，还需要在 GitHub 仓库的 `Settings -> Secrets and variables -> Actions` 中添加同名 Secrets：
 
 - `VITE_SUPABASE_URL`
@@ -83,7 +124,7 @@ npm run build
 - `typescript`：代码类型检查。
 - `lucide-react`：页面里的图标。
 - `@supabase/supabase-js`：第四次迭代用于连接 Supabase Auth、Storage 和数据库。
-- Vercel Serverless / Supabase Edge Functions：第五次迭代用于部署 DeepSeek 后端代理，不新增前端 npm 依赖。
+- Vercel Serverless / Supabase Edge Functions：第五次迭代用于部署 DeepSeek 后端代理，第七次迭代继续用于微信公众号草稿箱代理，不新增前端 npm 依赖。
 
 原创功能部分：
 
@@ -93,6 +134,7 @@ npm run build
 - 平台预览、编辑、模拟发布、发布失败重试和发布记录。
 - 第四次迭代的真实账号和数据保存流程：邮箱密码登录、头像上传、保存当前内容方案、读取当前账号历史内容、重新打开草稿、持久化模拟发布记录，并在 Supabase 未配置时提供本地保存兜底。
 - 真实能力预研区和迭代规划说明。
+- 第七次迭代的平台账号接入中心、公众号草稿同步前端流程和微信后端代理封装。
 
 ## 产品流程
 
@@ -370,3 +412,49 @@ Vercel 后端也可以继续使用：
 2. 打开工作台，输入内容并生成平台版本。
 3. 清空标题、标签或小红书封面标题，确认发布前检查能提示问题。
 4. 点击“复制发布内容”“打开发布入口”“生成清单”，确认半自动发布流程可用。
+
+## 第七次迭代实现说明
+
+本次第七次迭代按“平台账号接入中心与微信公众号草稿箱同步”落地。它先把平台账号接入入口放到个人中心，同时只让微信公众号进入真实草稿箱同步试点。
+
+已增加内容：
+
+- 工作台顶部更新为 `CreatorSync V7`，说明当前是公众号草稿箱同步试点版。
+- 个人中心新增“四个平台账号接入”区域：微信公众号显示草稿箱同步试点，知乎、B站、小红书显示待接入和后续所需条件。
+- 个人中心支持用户级微信公众号绑定：填写公众号 ID、AppID、AppSecret、默认封面 `media_id` 和作者名。
+- 后端新增 Vercel Serverless 入口 `api/wechat/account.js`、`api/wechat/draft.js`，Supabase Edge Function 也支持 `/api/wechat/account` 和 `/api/wechat/draft` 路径。
+- AppSecret 只提交给后端加密保存到 `wechat_accounts` 表，前端不回显密钥；工作台同步草稿时按当前登录用户读取绑定配置。
+- 发布成功或失败都会进入当前页面的发布记录；如果当前方案可保存，也会复用原有保存流程写入记录，未登录时不阻塞发布动作。
+
+微信公众号配置方式：
+
+1. 执行或同步 `supabase/schema.sql`，新增 `wechat_accounts` 表。
+2. 后端配置 `SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`、`WECHAT_SECRET_ENCRYPTION_KEY`。
+3. 用户在公众号后台准备 AppID、AppSecret，并确认服务器 IP 白名单。
+4. 用户先上传默认封面图到公众号素材库，拿到 `thumb_media_id`。
+5. 用户登录后打开个人中心，填写公众号 ID、AppID、AppSecret 和默认封面 `media_id` 并保存。
+6. 工作台点击“同步到绑定公众号”时，后端按当前登录用户读取配置，并真实调用微信草稿箱接口。
+
+本次仍然不做：
+
+- 不做用户级公众号 OAuth 授权；本次采用手动填写 AppID/AppSecret 的演示方案。
+- 不在前端保存或回显 AppSecret；密钥只在后端加密保存和调用微信接口时使用。
+- 不做公众号群发发布，只同步到草稿箱，最终预览和发布仍在微信公众平台后台完成。
+- 不接入知乎、B站、小红书真实发布 API，只保留接入中心入口和后续扩展结构。
+
+平台判断来源：
+
+- 微信公众号草稿箱接口可作为图文草稿同步方向，但需要后端保管密钥、素材上传和白名单配置，文档入口：`https://developers.weixin.qq.com/doc/offiaccount/Draft_Box/Add_draft.html`。
+- 微信公众号获取接口调用凭据需要 AppID/AppSecret，文档入口：`https://developers.weixin.qq.com/doc/offiaccount/Basic_Information/Get_access_token.html`。
+- B站开放平台文档入口是 `https://openhome.bilibili.com/doc`，本次继续作为后续视频或专栏能力预研。
+- 知乎数据开放平台入口是 `https://developer.zhihu.com/`，本次继续保留待接入状态。
+- 小红书开放平台入口是 `https://open.xiaohongshu.com/`，本次继续保留待接入状态。
+
+推荐验证方式：
+
+1. 运行 `npm run build`。
+2. 不配置后端密钥或未登录时，打开个人中心确认绑定表单给出清楚提示。
+3. 登录后在个人中心填写公众号 ID、AppID、AppSecret、默认封面 `media_id` 并保存。
+4. 回到工作台生成微信公众号草稿，点击“同步到绑定公众号”。
+5. 配置真实公众号和后端白名单后，确认微信返回成功，页面展示草稿 `media_id`。
+6. 回归检查 Mock AI、DeepSeek、保存当前方案、发布记录页、个人中心仍可正常打开。
